@@ -1,0 +1,387 @@
+---
+title: "Medications API — Drug Catalog with OTC and Rx Classification"
+sidebarTitle: "Medications"
+description: "Query MELIKA's medication catalog by type (OTC/Rx), specialty, or search term. Returns commercial name, active ingredient, lab, presentation, and specialty linkage."
+---
+
+The Medications API exposes MELIKA's drug catalog for use across the platform — from patient-facing drug information pages to physician prescribing workflows. Medications are classified as either **OTC** (over-the-counter, no prescription required) or **Rx** (prescription-only), are linked to medical specialties for contextual filtering, and carry structured presentation data. All endpoints are public with no authentication required, though write operations are restricted to admin routes at the application layer.
+
+---
+
+## OTC vs Rx Classification
+
+<CardGroup cols={2}>
+  <Card title="OTC — Over the Counter" icon="store">
+    Medications available without a prescription. Suitable for display in patient-facing catalogs, symptom checkers, and general wellness flows. Filtered with `tipo=OTC`.
+  </Card>
+  <Card title="Rx — Prescription Only" icon="file-prescription">
+    Medications that require a physician's prescription. These appear in clinical workflows, physician prescribing panels, and are embedded in clinical records via `medicamentos_recetados`. Filtered with `tipo=Rx`.
+  </Card>
+</CardGroup>
+
+---
+
+## Data Model
+
+The `medicamentos` table stores the full drug profile including commercial identity, active ingredient, lab origin, and specialty linkage.
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | integer | Primary key |
+| `nombre_comercial` | VARCHAR | Brand/commercial name |
+| `principio_activo` | VARCHAR | Generic active ingredient name |
+| `laboratorio` | VARCHAR | Manufacturing laboratory |
+| `tipo` | ENUM | `OTC` or `Rx` |
+| `descripcion` | TEXT | Clinical description |
+| `presentaciones` | TEXT / JSONB | Available forms and dosages (e.g. tablets, syrup) |
+| `imagen_url` | VARCHAR | URL to product image |
+| `id_especialidad` | integer | FK → specialties (contextual linkage) |
+| `activo` | boolean | Only `TRUE` records appear in public queries |
+| `created_at` | timestamp | Auto-generated |
+| `updated_at` | timestamp | Auto-updated |
+
+<Note>
+  All public-facing endpoints (`GET /medicamentos`, `GET /medicamentos/:id`) return only **active medications** (`activo = TRUE`). Inactive entries are accessible only via the admin route.
+</Note>
+
+---
+
+## Endpoints
+
+### GET /medicamentos
+
+Returns a filtered, pageable list of active medications. Supports three independent query filters that can be combined freely: `tipo` restricts by prescription class, `id_especialidad` restricts by specialty linkage, and `buscar` performs a case-insensitive full-text search across both `nombre_comercial` and `principio_activo`. Results are ordered alphabetically by `nombre_comercial`.
+
+**Authentication:** None (public)
+
+<ParamField query="tipo" type="string">
+  Filter by prescription classification. Accepted values: `OTC`, `Rx`. Omit to return both types.
+</ParamField>
+<ParamField query="id_especialidad" type="string">
+  Filter by specialty. Pass a numeric specialty ID to restrict results to medications linked to that discipline. Pass `"Todos"` or omit entirely to return medications across all specialties.
+</ParamField>
+<ParamField query="buscar" type="string">
+  Case-insensitive search string applied via `ILIKE` against both `nombre_comercial` and `principio_activo`. Partial matches are supported.
+</ParamField>
+
+<ResponseField name="[].id" type="integer">
+  Medication identifier.
+</ResponseField>
+<ResponseField name="[].nombre_comercial" type="string">
+  Commercial/brand name (e.g. `"Metformina 500"`).
+</ResponseField>
+<ResponseField name="[].principio_activo" type="string">
+  Generic active ingredient (e.g. `"metformina"`).
+</ResponseField>
+<ResponseField name="[].laboratorio" type="string">
+  Manufacturing laboratory name.
+</ResponseField>
+<ResponseField name="[].tipo" type="string">
+  `"OTC"` or `"Rx"`.
+</ResponseField>
+<ResponseField name="[].descripcion" type="string">
+  Clinical description of the medication.
+</ResponseField>
+<ResponseField name="[].presentaciones" type="string">
+  Available forms and dosages.
+</ResponseField>
+<ResponseField name="[].imagen_url" type="string">
+  URL to the product image.
+</ResponseField>
+<ResponseField name="[].id_especialidad" type="integer">
+  ID of the linked specialty.
+</ResponseField>
+<ResponseField name="[].activo" type="boolean">
+  Always `true` in public responses.
+</ResponseField>
+
+<CodeGroup>
+```bash All active medications
+curl -X GET "http://localhost:3000/medicamentos"
+```
+
+```bash Filter: Rx only
+curl -X GET "http://localhost:3000/medicamentos?tipo=Rx"
+```
+
+```bash Filter: search by active ingredient
+curl -X GET "http://localhost:3000/medicamentos?tipo=Rx&buscar=metformina"
+```
+
+```bash Filter: by specialty + type
+curl -X GET "http://localhost:3000/medicamentos?tipo=OTC&id_especialidad=2"
+```
+</CodeGroup>
+
+**Example — `GET /medicamentos?tipo=Rx&buscar=metformina`:**
+
+```json
+[
+  {
+    "id": 14,
+    "nombre_comercial": "Metformina 500",
+    "principio_activo": "metformina",
+    "laboratorio": "Laboratorios GenFar",
+    "tipo": "Rx",
+    "descripcion": "Antidiabético oral de la clase biguanida. Reduce la producción hepática de glucosa.",
+    "presentaciones": "Tabletas 500mg, 850mg, 1000mg",
+    "imagen_url": "https://storage.example.com/meds/metformina.jpg",
+    "id_especialidad": 4,
+    "activo": true
+  },
+  {
+    "id": 27,
+    "nombre_comercial": "Glucophage XR",
+    "principio_activo": "metformina",
+    "laboratorio": "Merck",
+    "tipo": "Rx",
+    "descripcion": "Formulación de liberación extendida de metformina para diabetes tipo 2.",
+    "presentaciones": "Tabletas de liberación extendida 500mg, 750mg",
+    "imagen_url": "https://storage.example.com/meds/glucophage.jpg",
+    "id_especialidad": 4,
+    "activo": true
+  }
+]
+```
+
+<Tip>
+  Combine `tipo=Rx` with a `buscar` term to power a physician-side drug search widget during prescription creation. The results map directly to the objects expected by the `medicamentos_recetados` JSONB field in clinical records.
+</Tip>
+
+---
+
+### GET /medicamentos/admin
+
+Returns all medications including inactive ones (`activo = FALSE`) for administrative management. Intended for use in admin dashboards where operators manage the drug catalog.
+
+**Authentication:** None at route level (enforced at the admin layer)
+
+<ResponseField name="[].id" type="integer">Medication identifier.</ResponseField>
+<ResponseField name="[].nombre_comercial" type="string">Commercial name.</ResponseField>
+<ResponseField name="[].principio_activo" type="string">Active ingredient.</ResponseField>
+<ResponseField name="[].laboratorio" type="string">Manufacturing laboratory.</ResponseField>
+<ResponseField name="[].tipo" type="string">`"OTC"` or `"Rx"`.</ResponseField>
+<ResponseField name="[].activo" type="boolean">Active status — includes both `true` and `false` records.</ResponseField>
+
+<CodeGroup>
+```bash cURL
+curl -X GET "http://localhost:3000/medicamentos/admin"
+```
+</CodeGroup>
+
+---
+
+### GET /medicamentos/categorias
+
+Returns a deduplicated list of specialty names that have at least one active medication linked to them. This powers category filter UIs in medication browsers, letting patients or physicians narrow results to a specific discipline before applying further filters.
+
+**Authentication:** None (public)
+
+<ResponseField name="[]" type="string">
+  Array of specialty name strings (e.g. `["Cardiología", "Endocrinología", "Pediatría"]`). Each value corresponds to the `nombre` field of a specialty that has at least one active medication.
+</ResponseField>
+
+<CodeGroup>
+```bash cURL
+curl -X GET "http://localhost:3000/medicamentos/categorias"
+```
+
+```js JavaScript
+const res = await fetch('http://localhost:3000/medicamentos/categorias');
+const categories = await res.json();
+// → ["Cardiología", "Endocrinología", "Neurología", "Pediatría"]
+```
+</CodeGroup>
+
+**Example response:**
+
+```json
+[
+  "Cardiología",
+  "Endocrinología",
+  "Medicina General",
+  "Neurología",
+  "Pediatría"
+]
+```
+
+---
+
+### GET /medicamentos/:id
+
+Retrieves the full profile of a single active medication by its ID. Returns **404** if the medication does not exist or is inactive.
+
+**Authentication:** None (public)
+
+<ParamField path="id" type="integer" required>
+  The medication's unique identifier.
+</ParamField>
+
+<ResponseField name="id" type="integer">Medication identifier.</ResponseField>
+<ResponseField name="nombre_comercial" type="string">Commercial/brand name.</ResponseField>
+<ResponseField name="principio_activo" type="string">Generic active ingredient.</ResponseField>
+<ResponseField name="laboratorio" type="string">Manufacturing laboratory.</ResponseField>
+<ResponseField name="tipo" type="string">`"OTC"` or `"Rx"`.</ResponseField>
+<ResponseField name="descripcion" type="string">Clinical description.</ResponseField>
+<ResponseField name="presentaciones" type="string">Available forms and dosages.</ResponseField>
+<ResponseField name="imagen_url" type="string">Product image URL.</ResponseField>
+<ResponseField name="id_especialidad" type="integer">Linked specialty ID.</ResponseField>
+<ResponseField name="activo" type="boolean">Active status (`true` for all public responses).</ResponseField>
+<ResponseField name="created_at" type="string">ISO 8601 creation timestamp.</ResponseField>
+<ResponseField name="updated_at" type="string">ISO 8601 last-updated timestamp.</ResponseField>
+
+<Expandable title="Error Responses">
+  | Status | Condition |
+  |---|---|
+  | `404` | No active medication found with the given `id` |
+</Expandable>
+
+<CodeGroup>
+```bash cURL
+curl -X GET "http://localhost:3000/medicamentos/14"
+```
+
+```js JavaScript
+const res = await fetch('http://localhost:3000/medicamentos/14');
+if (res.status === 404) {
+  console.error('Medication not found or inactive');
+} else {
+  const medication = await res.json();
+}
+```
+</CodeGroup>
+
+**Example response:**
+
+```json
+{
+  "id": 14,
+  "nombre_comercial": "Metformina 500",
+  "principio_activo": "metformina",
+  "laboratorio": "Laboratorios GenFar",
+  "tipo": "Rx",
+  "descripcion": "Antidiabético oral de la clase biguanida. Reduce la producción hepática de glucosa y mejora la sensibilidad a la insulina.",
+  "presentaciones": "Tabletas 500mg, 850mg, 1000mg",
+  "imagen_url": "https://storage.example.com/meds/metformina.jpg",
+  "id_especialidad": 4,
+  "activo": true,
+  "created_at": "2024-01-15T10:00:00.000Z",
+  "updated_at": "2024-06-01T08:30:00.000Z"
+}
+```
+
+---
+
+### POST /medicamentos
+
+Creates a new medication entry in the catalog. This operation is reserved for platform administrators and is exposed through the `/admin/medicamentos` route layer.
+
+**Authentication:** None at route level (enforced at the admin layer)
+
+<ParamField body="nombre_comercial" type="string" required>
+  The brand or commercial name of the medication.
+</ParamField>
+<ParamField body="principio_activo" type="string" required>
+  The generic active ingredient name.
+</ParamField>
+<ParamField body="laboratorio" type="string">
+  The manufacturing laboratory.
+</ParamField>
+<ParamField body="tipo" type="string" required>
+  Prescription classification. Must be exactly `"OTC"` or `"Rx"`.
+</ParamField>
+<ParamField body="descripcion" type="string">
+  Clinical description of the medication and its indications.
+</ParamField>
+<ParamField body="presentaciones" type="string">
+  Available forms and dosages (e.g. `"Tabletas 500mg, 1000mg; Solución oral 250mg/5ml"`).
+</ParamField>
+<ParamField body="imagen_url" type="string">
+  URL to the product image.
+</ParamField>
+<ParamField body="id_especialidad" type="integer">
+  ID of the specialty this medication is primarily associated with.
+</ParamField>
+<ParamField body="activo" type="boolean">
+  Whether the medication is immediately visible in public queries. Defaults to `true`.
+</ParamField>
+
+<CodeGroup>
+```bash cURL
+curl -X POST http://localhost:3000/medicamentos \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nombre_comercial": "Atorvastatina 20",
+    "principio_activo": "atorvastatina",
+    "laboratorio": "Pfizer",
+    "tipo": "Rx",
+    "descripcion": "Inhibidor de la HMG-CoA reductasa. Indicado para la reducción del colesterol LDL.",
+    "presentaciones": "Tabletas 10mg, 20mg, 40mg",
+    "imagen_url": "https://storage.example.com/meds/atorvastatina.jpg",
+    "id_especialidad": 1,
+    "activo": true
+  }'
+```
+</CodeGroup>
+
+---
+
+### PUT /medicamentos/:id
+
+Fully updates an existing medication record. All fields may be replaced. Setting `activo=false` removes the medication from all public-facing queries without deleting the record.
+
+**Authentication:** None at route level (enforced at the admin layer)
+
+<ParamField path="id" type="integer" required>
+  The ID of the medication to update.
+</ParamField>
+<ParamField body="nombre_comercial" type="string">
+  Updated commercial name.
+</ParamField>
+<ParamField body="principio_activo" type="string">
+  Updated active ingredient.
+</ParamField>
+<ParamField body="laboratorio" type="string">
+  Updated laboratory.
+</ParamField>
+<ParamField body="tipo" type="string">
+  Updated classification: `"OTC"` or `"Rx"`.
+</ParamField>
+<ParamField body="descripcion" type="string">
+  Updated clinical description.
+</ParamField>
+<ParamField body="presentaciones" type="string">
+  Updated presentation forms and dosages.
+</ParamField>
+<ParamField body="imagen_url" type="string">
+  Updated product image URL.
+</ParamField>
+<ParamField body="id_especialidad" type="integer">
+  Updated specialty linkage.
+</ParamField>
+<ParamField body="activo" type="boolean">
+  Set to `false` to deactivate and hide from public listings.
+</ParamField>
+
+<CodeGroup>
+```bash cURL
+curl -X PUT http://localhost:3000/medicamentos/14 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "presentaciones": "Tabletas 500mg, 850mg, 1000mg; Solución oral 500mg/5ml",
+    "activo": true
+  }'
+```
+
+```js JavaScript
+const res = await fetch('http://localhost:3000/medicamentos/14', {
+  method: 'PUT',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    presentaciones: 'Tabletas 500mg, 850mg, 1000mg; Solución oral 500mg/5ml',
+    activo: true
+  })
+});
+const updated = await res.json();
+```
+</CodeGroup>

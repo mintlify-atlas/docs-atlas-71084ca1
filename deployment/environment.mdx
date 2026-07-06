@@ -1,0 +1,126 @@
+---
+title: "Environment Variables and Configuration Reference for MELIKA"
+sidebarTitle: "Environment"
+description: "Complete reference for all MELIKA server and client environment variables — database connection, JWT secret, CORS origins, and Gmail OAuth2 credentials for email delivery."
+---
+
+MELIKA's runtime behaviour is driven entirely by environment variables — no secrets are ever committed to the repository. Before starting either service you must define every required variable in the appropriate `.env` file (for local development) or in the Railway service dashboard (for production). This page catalogues every variable, shows example values, and walks through the Gmail OAuth2 credential flow that powers transactional email delivery.
+
+## Server environment variables
+
+The Express backend reads these variables at startup. Missing required variables will cause the server to crash or silently degrade security-sensitive features.
+
+| Variable | Description | Example value | Required |
+|---|---|---|---|
+| `PORT` | TCP port the Express server listens on. Railway injects this automatically; default is `3000` locally. | `3000` | No |
+| `DATABASE_URL` | Full PostgreSQL connection string. Railway injects this automatically when you link a Postgres service. | `postgresql://user:pass@host:5432/melika_db` | **Yes** |
+| `JWT_SECRET` | Secret used to sign and verify JSON Web Tokens. Must be long and unpredictable. Rotating this value invalidates every active session. | `a8f3...` (64+ random chars) | **Yes** |
+| `FRONTEND_URL` | Allowed CORS origin for the production frontend. Must match the deployed client URL **exactly** — no trailing slash. | `https://melika-client.up.railway.app` | **Yes** |
+| `GMAIL_USER` | Gmail address that sends verification and notification emails. | `noreply@yourapp.com` | **Yes** |
+| `GMAIL_CLIENT_ID` | OAuth2 client ID obtained from Google Cloud Console. | `1234567890-abc.apps.googleusercontent.com` | **Yes** |
+| `GMAIL_CLIENT_SECRET` | OAuth2 client secret paired with `GMAIL_CLIENT_ID`. | `GOCSPX-...` | **Yes** |
+| `GMAIL_REFRESH_TOKEN` | Long-lived OAuth2 refresh token used to mint access tokens for the Gmail API. | `1//04...` | **Yes** |
+
+## Client environment variables
+
+Vite injects variables prefixed with `VITE_` into the browser bundle at **build time**. Any variable without this prefix is stripped from the bundle and will be `undefined` in the browser.
+
+| Variable | Description | Example value | Required |
+|---|---|---|---|
+| `VITE_API_URL` | Base URL of the MELIKA backend. The React app appends API paths to this value. Must **not** have a trailing slash. | `https://melika-server.up.railway.app` | **Yes** |
+
+<Warning>
+Only variables prefixed with `VITE_` are embedded in the browser bundle. Never place secrets (database passwords, JWT secrets, OAuth credentials) in client-side environment variables — they would be publicly visible in the compiled JavaScript.
+</Warning>
+
+## Gmail OAuth2 setup
+
+MELIKA uses Gmail's OAuth2 flow instead of a plain SMTP password so that Google cannot block transactional email as "less secure app access". Follow these steps once to obtain the four Gmail-related variables.
+
+<Steps>
+  <Step title="Create a Google Cloud project">
+    Go to [console.cloud.google.com](https://console.cloud.google.com), click **New Project**, give it a name (e.g. `melika-mail`), and note the project ID.
+  </Step>
+  <Step title="Enable the Gmail API">
+    In the project, navigate to **APIs & Services → Library**, search for **Gmail API**, and click **Enable**.
+  </Step>
+  <Step title="Create OAuth2 credentials">
+    Go to **APIs & Services → Credentials → Create Credentials → OAuth client ID**. Choose **Web application** as the application type. Add `https://developers.google.com/oauthplayground` as an authorised redirect URI, then click **Create**. Copy the **Client ID** → `GMAIL_CLIENT_ID` and **Client Secret** → `GMAIL_CLIENT_SECRET`.
+  </Step>
+  <Step title="Obtain a refresh token">
+    Open [OAuth 2.0 Playground](https://developers.google.com/oauthplayground). Click the gear icon (**OAuth2 configuration**), enable **Use your own OAuth credentials**, and paste your Client ID and Client Secret. In **Step 1**, select `https://mail.google.com/` from the Gmail API scopes and click **Authorise APIs**. Sign in with `GMAIL_USER`. In **Step 2**, click **Exchange authorization code for tokens**. Copy the **Refresh token** → `GMAIL_REFRESH_TOKEN`.
+  </Step>
+</Steps>
+
+<Note>
+Refresh tokens for Google Workspace accounts do not expire unless revoked. For personal Gmail accounts, tokens expire if unused for six months. Regenerate the token and update `GMAIL_REFRESH_TOKEN` if email delivery stops working.
+</Note>
+
+## CORS configuration
+
+The server's allowed-origins list is defined in `server.js` as:
+
+```js server/src/server.js
+const allowedOrigins = [
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  process.env.FRONTEND_URL,
+];
+```
+
+`credentials: true` is also set, which means the browser will include cookies and `Authorization` headers in cross-origin requests. Both constraints apply:
+
+<Warning>
+`FRONTEND_URL` must match the production frontend URL **exactly** — same scheme, same hostname, no trailing slash. For example, `https://melika-client.up.railway.app` and `https://melika-client.up.railway.app/` are treated as different origins and the latter will be blocked.
+</Warning>
+
+## JWT secret guidance
+
+<Warning>
+Use a cryptographically random string of at least 64 characters for `JWT_SECRET`. You can generate one with:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
+```
+
+**Rotating `JWT_SECRET` immediately invalidates every active user session** — all logged-in users will be signed out. Schedule rotations during a maintenance window and communicate downtime in advance.
+</Warning>
+
+## Example .env files
+
+<CodeGroup>
+```bash server/.env
+# Server — never commit this file
+PORT=3000
+DATABASE_URL=postgresql://postgres:password@localhost:5432/melika_db
+JWT_SECRET=replace_with_64_plus_random_hex_chars
+FRONTEND_URL=http://localhost:5173
+
+GMAIL_USER=noreply@yourapp.com
+GMAIL_CLIENT_ID=1234567890-abc.apps.googleusercontent.com
+GMAIL_CLIENT_SECRET=GOCSPX-xxxxxxxxxxxxxxxxxxxxxxxx
+GMAIL_REFRESH_TOKEN=1//04xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+```bash client/.env
+# Client — only VITE_-prefixed vars are exposed to the browser
+VITE_API_URL=http://localhost:3000
+```
+</CodeGroup>
+
+<Note>
+Add both `.env` files to `.gitignore` before your first commit. Railway injects production values through its service dashboard, so `.env` files are only needed for local development.
+</Note>
+
+## Data protection — Colombia Ley 1581/2012
+
+MELIKA stores **datos sensibles de salud** (clinical histories, diagnoses, prescriptions) which are classified as sensitive personal data under Colombia's **Ley 1581 de 2012** and its regulatory decree **1377 de 2013**. Operators must:
+
+<Info>
+- Obtain explicit, informed consent from patients before collecting health data.
+- Store `DATABASE_URL` and `JWT_SECRET` only in secure secret stores — never in source code or public repositories.
+- Restrict database access to the minimum set of users and services that require it.
+- Maintain an audit log of access to clinical histories (MELIKA's `logs_citas` table partially satisfies this requirement).
+- Appoint a **Responsable del Tratamiento** and publish a **Política de Tratamiento de Datos Personales** accessible to all users.
+- Report data breaches to the **Superintendencia de Industria y Comercio (SIC)** within the timeframes established by the authority.
+</Info>

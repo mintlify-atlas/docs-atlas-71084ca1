@@ -1,0 +1,183 @@
+---
+title: "Patient Role: Booking Appointments and Viewing Records"
+sidebarTitle: "Patient"
+description: "What patients can do in MELIKA — registration, email verification, appointment booking, calendar view, clinical record access, and document management."
+---
+
+Patients are the primary end users of MELIKA. After registering and verifying their email address, they can browse medical specialties, book appointments with available doctors, track upcoming and past visits on a personal calendar, and review their full clinical history — all without requiring any administrative intervention.
+
+## Registration
+
+To create a MELIKA patient account, the following fields are required at sign-up:
+
+| Field | Type | Notes |
+|---|---|---|
+| `nombre` | `string` | First name |
+| `primer_apellido` | `string` | First surname |
+| `email` | `string` | Must be unique; used for verification |
+| `password` | `string` | Stored as a bcrypt hash |
+| `tipo_documento` | `enum` | One of `CC`, `CE`, or `PASAPORTE` |
+| `numero_documento` | `string` | National ID / passport number |
+| `fecha_nacimiento` | `date` | Format `YYYY-MM-DD` |
+| `genero` | `string` | Patient's gender |
+
+After submission, the account is created in an **unverified** state and the patient is taken through the email verification step before gaining access to authenticated routes.
+
+## Email Verification
+
+Before a newly registered patient can book appointments or view records, MELIKA requires email verification.
+
+<Steps>
+  <Step title="Code delivered">
+    Immediately after registration, MELIKA sends a **6-digit numeric code** to the provided email address. The code is valid for **15 minutes**.
+  </Step>
+  <Step title="Enter the code">
+    The patient enters the code on the verification screen. A correct submission marks the account as verified and issues a session token.
+  </Step>
+  <Step title="Resend if needed">
+    If the code expires or is not received, the patient can request a new code from the same verification screen. A fresh 15-minute window starts on every resend.
+  </Step>
+</Steps>
+
+<Note>
+  Verification codes are single-use. Requesting a resend immediately invalidates the previous code.
+</Note>
+
+## Booking an Appointment
+
+Once verified, a patient can book an appointment through the following workflow:
+
+<Steps>
+  <Step title="Browse specialties">
+    The specialties listing (`/especialidades`) is **publicly accessible** — no authentication is required. Patients can explore available fields of medicine before deciding to register.
+  </Step>
+  <Step title="Select a doctor">
+    After choosing a specialty, the patient picks a doctor from the list of practitioners associated with that specialty.
+  </Step>
+  <Step title="Choose a date">
+    The patient selects a preferred date from the doctor's availability calendar.
+  </Step>
+  <Step title="Pick a time slot">
+    Available 40-minute slots for the chosen date are listed. The patient selects one open slot (`disponible = true`).
+  </Step>
+  <Step title="Confirm the booking">
+    The patient confirms the appointment. MELIKA sends a `POST` request to `/citas` with the following payload:
+
+    ```json
+    {
+      "id_medico": 3,
+      "id_especialidad": 1,
+      "id_franja": 42,
+      "fecha": "2025-08-15",
+      "hora_inicio": "09:00"
+    }
+    ```
+
+    On success, the new appointment appears immediately in the patient's appointment list and calendar.
+  </Step>
+</Steps>
+
+## Viewing Appointments
+
+Patients have two complementary views for tracking their appointments:
+
+<Tabs>
+  <Tab title="Appointment List">
+    **Endpoint:** `GET /citas/mis-citas`
+
+    Returns a chronological list of all appointments belonging to the authenticated patient, including their current status (`pendiente`, `completada`, `cancelada`, `no_asistio`).
+
+    ```http
+    GET /citas/mis-citas
+    Authorization: Bearer <token>
+    ```
+  </Tab>
+  <Tab title="Calendar View">
+    **Endpoint:** `GET /citas/calendario`
+
+    Returns appointment data formatted as FullCalendar event objects, powering the interactive monthly/weekly calendar on the patient dashboard at `/dashboard`.
+
+    ```http
+    GET /citas/calendario
+    Authorization: Bearer <token>
+    ```
+  </Tab>
+</Tabs>
+
+## Cancelling an Appointment
+
+A patient may cancel a pending appointment and, once cancelled, remove it from their list entirely.
+
+<Steps>
+  <Step title="Request cancellation">
+    Send a `PATCH` request to `/citas/:id` with a mandatory cancellation reason:
+
+    ```json
+    {
+      "razon_cancelacion": "Scheduling conflict — unable to attend"
+    }
+    ```
+
+    The appointment status changes to `cancelada`. The `razon_cancelacion` field is **required**; the request is rejected without it.
+  </Step>
+  <Step title="Delete the record (optional)">
+    After cancellation, the patient may permanently delete the appointment entry:
+
+    ```http
+    DELETE /citas/:id
+    Authorization: Bearer <token>
+    ```
+
+    Only appointments with `cancelada` status can be deleted by a patient.
+  </Step>
+</Steps>
+
+## Clinical Records
+
+Patients have **read-only** access to their own clinical history. No patient-facing route permits creating or modifying medical records.
+
+<Tabs>
+  <Tab title="Full History">
+    **Endpoint:** `GET /historias/paciente/:id_paciente`
+
+    Returns all structured clinical history entries linked to the patient, including diagnoses, prescriptions, and evolution notes added by doctors.
+
+    ```http
+    GET /historias/paciente/7
+    Authorization: Bearer <token>
+    ```
+  </Tab>
+  <Tab title="Documents">
+    **Endpoint:** `GET /historias/documentos/paciente/:id_paciente`
+
+    Lists all documents (lab results, imaging reports, external referrals) attached to the patient's record.
+
+    ```http
+    GET /historias/documentos/paciente/7
+    Authorization: Bearer <token>
+    ```
+  </Tab>
+</Tabs>
+
+## Document Visibility Control
+
+Patients can choose to **hide** externally uploaded documents from their default document view. Hidden documents are not deleted — they remain accessible to authorised medical staff.
+
+```http
+PATCH /historias/documentos/:id/ocultar
+Authorization: Bearer <token>
+```
+
+This route is protected by the `isPaciente` middleware guard, ensuring only the document's owner can toggle its visibility.
+
+<Accordion title="What counts as an external document?">
+  External documents are files uploaded outside of a standard MELIKA consultation — for example, lab results from a third-party clinic, imaging files, or referral letters. They are linked to the patient's record but carry an `externo` flag that distinguishes them from notes created by MELIKA doctors.
+</Accordion>
+
+## Dashboard and Route Guard
+
+The patient dashboard is available at `/dashboard`. Access is controlled by the `RutaPaciente` guard defined in `App.jsx`, which reads the `rol` claim from the JWT token.
+
+<Note>
+  If a user with a **medico** or **admin** role attempts to navigate to `/dashboard`, the `RutaPaciente` guard redirects them automatically to their own dashboard (`/dashboard-medico` or `/admin`, respectively). Role-based redirects work symmetrically — each guard enforces separation between the three panels.
+</Note>

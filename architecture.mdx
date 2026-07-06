@@ -1,0 +1,236 @@
+---
+title: "MELIKA System Architecture and Project Structure"
+sidebarTitle: "Architecture"
+description: "How MELIKA's React frontend, Express REST API, and PostgreSQL database connect — including the role-based auth flow, route organization, and database schema design."
+---
+
+MELIKA is composed of two independently deployable services — a Node.js/Express REST API and a React/Vite single-page application — backed by a single PostgreSQL database. This page explains how those pieces fit together: how the client talks to the server, how the server enforces role boundaries, and how the database is structured to guarantee data integrity and a complete audit trail.
+
+## High-Level Architecture
+
+MELIKA follows a classic three-tier architecture deployed as two Railway services sharing one managed database:
+
+```
+┌─────────────────────────────┐        HTTPS / JSON
+│   React SPA (client/)       │ ◄─────────────────────► ┌──────────────────────────────┐
+│   Vite 8 · React Router v7  │                          │   Express API (server/)       │
+│   Port 5173 (dev)           │                          │   Node.js ≥ 20 · Express 5    │
+└─────────────────────────────┘                          │   Port 3000                   │
+                                                         └──────────────┬───────────────┘
+                                                                        │ pg.Pool
+                                                                        ▼
+                                                         ┌──────────────────────────────┐
+                                                         │   PostgreSQL                  │
+                                                         │   Database: melika_db         │
+                                                         └──────────────────────────────┘
+```
+
+The client **never** connects directly to the database. All data flows through the REST API, which validates the JWT on every protected request before touching PostgreSQL.
+
+---
+
+## Server Structure
+
+### Express Application (`server/src/server.js`)
+
+The Express app is mounted at the root and registers routes in this order:
+
+| Prefix | Router file | Access |
+|---|---|---|
+| `/` | Inline health-check handler | Public |
+| `/auth` | `authRoutes` | Public (login, register, verify) |
+| `/admin` | `adminRoutes` | `verifyToken` + `isAdmin` |
+| `/especialidades` | `especialidadesRoutes` | Mixed (read: public, write: admin) |
+| `/citas` | `citasRoutes` | `verifyToken` + role-specific guards |
+| `/historias` | `historiasRoutes` | `verifyToken` + `isMedico` / `isPaciente` |
+| `/medicamentos` | `medicamentosRoutes` | `verifyToken` |
+| `/medicos` | `medicosRoutes` (admin view) | `verifyToken` + `isAdmin` |
+| `/medico` | `medicosRoutes` (doctor self-view) | `verifyToken` + `isMedico` |
+
+<Note>
+  `/medicos` and `/medico` both use the same router file (`medicosRoutes`). The internal route handlers distinguish the admin context from the doctor self-service context by checking the role middleware applied upstream.
+</Note>
+
+### Middleware Chain
+
+Every protected request passes through this middleware stack before reaching a controller:
+
+1. **CORS** — validates the `Origin` header against the `allowedOrigins` list; rejects unknown origins before any route logic runs.
+2. **`express.json()`** — parses the request body as JSON.
+3. **`verifyToken`** — extracts the `Bearer` token from the `Authorization` header, verifies it with `JWT_SECRET`, and attaches the decoded payload to `req.usuario`.
+4. **Role guard** — one of `isAdmin`, `isMedico`, or `isPaciente` checks `req.usuario.rol` and returns `403` if the role does not match.
+
+```js
+// server/src/middleware/authMiddleware.js (simplified)
+function verifyToken(req, res, next) {
+  const token = req.headers['authorization']?.split(' ')[1];
+  const decoded = jwt.verify(token, process.env.JWT_SECRET);
+  req.usuario = decoded;
+  next();
+}
+
+function isAdmin(req, res, next) {
+  if (req.usuario?.rol !== 'admin') return res.status(403).json({ ... });
+  next();
+}
+```
+
+### Database Connection (`server/src/config/db.js`)
+
+PostgreSQL is accessed through a `pg.Pool` instance. Connection pooling keeps the number of open sockets bounded under concurrent load, which matters when many patients are booking appointments simultaneously.
+
+```js
+// server/src/config/db.js
+const { Pool } = require('pg');
+
+const pool = new Pool({
+  host:     process.env.DB_HOST,
+  port:     process.env.DB_PORT,
+  database: process.env.DB_NAME,
+  user:     process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+});
+```
+
+---
+
+## Client Structure
+
+### React 19 + Vite 8 + React Router v7 (`client/`)
+
+The single-page application is bootstrapped with Vite and uses React Router v7's component-based `<Route>` tree defined in `App.jsx`.
+
+**Role-based route guards** are plain wrapper components that read from `AuthContext` and redirect unauthenticated or unauthorised users:
+
+```jsx
+// client/src/App.jsx (simplified)
+function RutaPaciente({ children }) { /* redirects if rol !== 'paciente' */ }
+function RutaMedico({ children })   { /* redirects if rol !== 'medico'   */ }
+function RutaAdmin({ children })    { /* redirects if rol !== 'admin'    */ }
+```
+
+Example route composition:
+
+```jsx
+<Route path="/dashboard"       element={<RutaPaciente><Dashboard /></RutaPaciente>} />
+<Route path="/agendar"         element={<RutaPaciente><Agendarcita /></RutaPaciente>} />
+<Route path="/mis-citas"       element={<RutaPaciente><MisCitas /></RutaPaciente>} />
+<Route path="/dashboard-medico" element={<RutaMedico><DashboardMedico /></RutaMedico>} />
+<Route path="/admin"           element={<RutaAdmin><AdminLayout /></RutaAdmin>} />
+```
+
+### Authentication Context (`client/src/context/AuthContext.jsx`)
+
+`AuthContext` is the single source of truth for the logged-in user on the client side. It persists both the JWT and the user object in `localStorage` under the keys `melika_token` and `melika_usuario`:
+
+| Key | Value |
+|---|---|
+| `melika_token` | Raw JWT string, sent as `Bearer` on every API request |
+| `melika_usuario` | JSON-serialised user object (`{ id, nombre, rol, … }`) |
+
+The context exposes three values to consuming components: `usuario` (current user or `null`), `login(token, datosUsuario)`, and `logout()`.
+
+### HTTP Client (`client/src/lib/apiClient.js`)
+
+All HTTP calls go through a single `api` object that centralises token injection, JSON serialisation, and error normalisation:
+
+```js
+// client/src/lib/apiClient.js
+const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+
+export const api = {
+  get:    (endpoint)       => request('GET',    endpoint),
+  post:   (endpoint, body) => request('POST',   endpoint, body),
+  put:    (endpoint, body) => request('PUT',    endpoint, body),
+  patch:  (endpoint, body) => request('PATCH',  endpoint, body),
+  delete: (endpoint)       => request('DELETE', endpoint),
+};
+```
+
+Errors thrown by `request()` are enriched with three extra fields so the UI can surface precise feedback:
+
+| Field | Type | Purpose |
+|---|---|---|
+| `error.mensaje` | `string` | Human-readable message from the backend |
+| `error.errores` | `array \| null` | Field-level validation errors (e.g. from 422 responses) |
+| `error.status` | `number` | HTTP status code, used to distinguish 401/403/422/500 |
+
+---
+
+## Database Schema
+
+The `melika_db` PostgreSQL database contains the following tables:
+
+| Table | Purpose |
+|---|---|
+| `usuarios` | All user accounts (patients, doctors, admins) with hashed passwords and role |
+| `codigos_verificacion` | One-time email verification codes for patient registration |
+| `tokens_invitacion` | Single-use invitation tokens emailed to new doctors by an admin |
+| `especialidades` | Medical specialties catalogue (cardiology, general medicine, etc.) |
+| `medicamentos` | Platform-wide medications catalogue for use in clinical records |
+| `medicos` | Doctor profiles linked to a `usuarios` record and one or more specialties |
+| `franjas_horarias` | 40-minute time slots per doctor per date, with an `disponible` boolean |
+| `citas` | Appointment records linking a patient, a doctor, and a `franjas_horarias` row |
+| `historias_clinicas` | Clinical records per appointment; `medicamentos_recetados` stored as JSONB |
+| `logs_citas` | Immutable audit log of every INSERT/UPDATE/DELETE on the `citas` table |
+
+---
+
+## Authentication Flow
+
+The following steps describe the full lifecycle from login to an authenticated API call:
+
+1. The user submits credentials (email + password) to `POST /auth/login`.
+2. The server fetches the matching `usuarios` row and calls `bcrypt.compare()` against the stored hash.
+3. On success, the server signs a JWT with `JWT_SECRET` and returns `{ token, usuario }`.
+4. The client's `AuthContext.login()` stores the token in `localStorage` as `melika_token`.
+5. Every subsequent call through `apiClient.js` reads `melika_token` and attaches it as `Authorization: Bearer <token>`.
+6. The server's `verifyToken` middleware decodes the JWT and sets `req.usuario = decoded`.
+7. The appropriate role guard (`isAdmin`, `isMedico`, or `isPaciente`) validates `req.usuario.rol`.
+8. The controller runs and queries PostgreSQL via `pg.Pool`.
+9. If the token is absent, expired, or tampered with, `verifyToken` returns `401 Unauthorized` immediately.
+
+---
+
+## Key Design Decisions
+
+### 40-Minute Appointment Slots
+
+All time slots (`franjas_horarias`) are enforced to be exactly **40 minutes** long. This is validated in the server controller before any slot is persisted:
+
+```js
+// server/src/controllers/adminController.js
+const DURACION_FRANJA_MIN = 40;
+
+if (duracionEnMinutos(hora_inicio, hora_fin) !== DURACION_FRANJA_MIN)
+  return res.status(400).json({
+    mensaje: `La franja debe tener una duración exacta de ${DURACION_FRANJA_MIN} minutos.`
+  });
+```
+
+### Concurrency Protection (Error Code 45002)
+
+When two patients attempt to book the same slot simultaneously, a PL/pgSQL trigger raises a custom PostgreSQL error code `45002` (`CONCURRENCY_CONFLICT`). The server catches this code and surfaces it as a user-friendly message rather than a generic 500 error, so the client can prompt the patient to select a different slot.
+
+### Immutable Audit Log (`fn_auditar_citas`)
+
+<Note>
+  The `fn_auditar_citas` trigger fires on **every** INSERT, UPDATE, and DELETE to the `citas` table and writes a row to `logs_citas` capturing the action, the previous state (`datos_anteriores`), and the new state (`datos_nuevos`) as JSONB. This log is append-only by design — no application role can UPDATE or DELETE rows in `logs_citas` — making it a reliable audit trail for compliance purposes.
+</Note>
+
+`logs_citas` also has two indexes to keep audit queries fast: a B-tree index on `id_cita` and a GIN index on `datos_nuevos` for full JSONB searches.
+
+### JSONB for Prescribed Medications
+
+The `medicamentos_recetados` column in `historias_clinicas` uses the PostgreSQL `JSONB` type. This allows a clinical record to store a flexible, richly structured prescription object (medicine name, dosage, frequency, duration) without requiring a normalised junction table, while still being indexable and queryable with standard PostgreSQL JSON operators.
+
+### `TO_CHAR` for Date Serialisation
+
+All SQL queries that return dates from `DATE`-typed columns use `TO_CHAR(column, 'YYYY-MM-DD')` rather than passing the raw `Date` object to JavaScript. This prevents off-by-one-day errors caused by the V8 JavaScript engine converting UTC midnight timestamps to the previous day in negative UTC-offset timezones — a common but subtle bug in Node.js + PostgreSQL applications.
+
+```sql
+-- Example from citasController.js
+SELECT TO_CHAR(c.fecha, 'YYYY-MM-DD') AS fecha   -- timezone-safe
+FROM citas c
+WHERE c.id_paciente = $1;
+```

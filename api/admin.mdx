@@ -1,0 +1,897 @@
+---
+title: "Admin API — Platform Management, Statistics, and CRUD Operations"
+sidebarTitle: "Admin"
+description: "The MELIKA admin API provides platform-wide statistics, user and appointment management, bulk schedule generation, and specialty and medication administration — all requiring admin JWT tokens."
+---
+
+The Admin API is the control plane of the MELIKA platform. It exposes a unified set of endpoints that let administrators monitor live statistics, manage user accounts, oversee appointments, build doctor schedules (individually or in bulk), and maintain the specialty and medication catalogs. Every endpoint in this group is protected by JWT verification and an admin-role guard — no operation can be performed by a patient or a doctor token.
+
+<Warning>
+  Admin tokens grant **full platform access** including the ability to deactivate users, cancel appointments, and modify the shared catalog. Store them in secrets managers, rotate them regularly, and never expose them in client-side code or public repositories.
+</Warning>
+
+<Note>
+  All `/admin` routes require an `Authorization: Bearer <token>` header where the JWT payload contains `rol = 'admin'`. Requests without a valid token return `401 Unauthorized`; requests with a non-admin token return `403 Forbidden`.
+</Note>
+
+---
+
+## Statistics
+
+### Get Platform Statistics
+
+<br />
+
+Retrieve a real-time snapshot of the entire platform: aggregate counts, appointment-state breakdown, the five most recent appointments, and the five most-requested doctors.
+
+**`GET /admin/stats`**
+
+No query parameters or request body required.
+
+<CodeGroup>
+```bash cURL
+curl -X GET http://localhost:3000/admin/stats \
+  -H "Authorization: Bearer <admin_token>"
+```
+</CodeGroup>
+
+**Response `200 OK`**
+
+<ResponseField name="totales" type="object">
+  Aggregate counts across the platform.
+  <Expandable title="totales fields">
+    <ResponseField name="totales.pacientes" type="integer">
+      Total registered patient accounts.
+    </ResponseField>
+    <ResponseField name="totales.medicos" type="integer">
+      Total registered doctor accounts.
+    </ResponseField>
+    <ResponseField name="totales.citas" type="integer">
+      Total appointments of any status ever recorded.
+    </ResponseField>
+    <ResponseField name="totales.citasHoy" type="integer">
+      Number of appointments scheduled for today (server's local date).
+    </ResponseField>
+    <ResponseField name="totales.especialidades" type="integer">
+      Total specialty entries in the catalog.
+    </ResponseField>
+    <ResponseField name="totales.medicamentos" type="integer">
+      Total medication entries in the catalog.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="citasPorEstado" type="array">
+  Appointment counts grouped by status.
+  <Expandable title="citasPorEstado item fields">
+    <ResponseField name="citasPorEstado[].estado" type="string">
+      Appointment status value (e.g. `pendiente`, `completada`, `cancelada`, `no_asistio`).
+    </ResponseField>
+    <ResponseField name="citasPorEstado[].total" type="integer">
+      Count of appointments in this status.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="ultimasCitas" type="array">
+  The five most recently created appointments across all doctors and patients.
+  <Expandable title="ultimasCitas item fields">
+    <ResponseField name="ultimasCitas[].id" type="integer">Appointment ID.</ResponseField>
+    <ResponseField name="ultimasCitas[].fecha" type="string">Date of the appointment (`YYYY-MM-DD`).</ResponseField>
+    <ResponseField name="ultimasCitas[].hora_inicio" type="string">Start time (`HH:MM`).</ResponseField>
+    <ResponseField name="ultimasCitas[].estado" type="string">Current appointment status.</ResponseField>
+    <ResponseField name="ultimasCitas[].tipo_consulta" type="string">Consultation type (e.g. `presencial`, `virtual`).</ResponseField>
+    <ResponseField name="ultimasCitas[].paciente_nombre" type="string">Patient's first name.</ResponseField>
+    <ResponseField name="ultimasCitas[].paciente_apellido" type="string">Patient's first surname.</ResponseField>
+    <ResponseField name="ultimasCitas[].medico_nombre" type="string">Doctor's first name.</ResponseField>
+    <ResponseField name="ultimasCitas[].medico_apellido" type="string">Doctor's first surname.</ResponseField>
+    <ResponseField name="ultimasCitas[].especialidad" type="string">Specialty associated with the appointment.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="medicosMasSolicitados" type="array">
+  The five doctors with the highest number of total appointments.
+  <Expandable title="medicosMasSolicitados item fields">
+    <ResponseField name="medicosMasSolicitados[].nombre" type="string">Doctor's first name.</ResponseField>
+    <ResponseField name="medicosMasSolicitados[].primer_apellido" type="string">Doctor's first surname.</ResponseField>
+    <ResponseField name="medicosMasSolicitados[].especialidad" type="string">Doctor's specialty.</ResponseField>
+    <ResponseField name="medicosMasSolicitados[].total_citas" type="integer">Total number of appointments for this doctor.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+---
+
+## User Management
+
+Administrators can list all users with flexible filtering and toggle any non-admin account between active and inactive states.
+
+### List Users
+
+**`GET /admin/usuarios`**
+
+<ParamField query="rol" type="string">
+  Filter by user role. Accepted values: `paciente`, `medico`, `admin`.
+</ParamField>
+
+<ParamField query="buscar" type="string">
+  Case-insensitive substring search (`ILIKE`) applied to `nombre`, `primer_apellido`, and `email`.
+</ParamField>
+
+<ParamField query="activo" type="string">
+  Filter by account status. Accepted values: `true`, `false`.
+</ParamField>
+
+Results are ordered by `created_at` descending (newest accounts first).
+
+<CodeGroup>
+```bash cURL — list all doctors
+curl -X GET "http://localhost:3000/admin/usuarios?rol=medico&activo=true" \
+  -H "Authorization: Bearer <admin_token>"
+```
+
+```bash cURL — search by name
+curl -X GET "http://localhost:3000/admin/usuarios?buscar=garcia" \
+  -H "Authorization: Bearer <admin_token>"
+```
+</CodeGroup>
+
+**Response `200 OK`** — array of user objects.
+
+<ResponseField name="[]" type="array">
+  <Expandable title="User object fields">
+    <ResponseField name="id" type="integer">User ID.</ResponseField>
+    <ResponseField name="nombre" type="string">First name.</ResponseField>
+    <ResponseField name="primer_apellido" type="string">First surname.</ResponseField>
+    <ResponseField name="email" type="string">Email address.</ResponseField>
+    <ResponseField name="rol" type="string">User role: `paciente`, `medico`, or `admin`.</ResponseField>
+    <ResponseField name="activo" type="boolean">Whether the account is active.</ResponseField>
+    <ResponseField name="verificado" type="boolean">Whether the email has been verified.</ResponseField>
+    <ResponseField name="telefono" type="string">Phone number (may be `null`).</ResponseField>
+    <ResponseField name="ciudad" type="string">City (may be `null`).</ResponseField>
+    <ResponseField name="created_at" type="string">ISO 8601 timestamp of account creation.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+---
+
+### Toggle User Status
+
+**`PATCH /admin/usuarios/:id/estado`**
+
+Toggles the `activo` field of the specified user. If the user is currently active they will be deactivated, and vice versa.
+
+<ParamField path="id" type="integer" required>
+  ID of the user to toggle.
+</ParamField>
+
+<Warning>
+  Admin accounts **cannot** be deactivated through this endpoint. Attempting to do so returns `400 Bad Request`.
+</Warning>
+
+<CodeGroup>
+```bash cURL
+curl -X PATCH http://localhost:3000/admin/usuarios/42/estado \
+  -H "Authorization: Bearer <admin_token>"
+```
+</CodeGroup>
+
+**Response `200 OK`**
+
+<ResponseField name="mensaje" type="string">
+  Human-readable confirmation: `"Usuario activado."` or `"Usuario desactivado."`.
+</ResponseField>
+
+**Error responses**
+
+| Status | Condition |
+|--------|-----------|
+| `400`  | Attempted to deactivate an admin account. |
+| `404`  | No user found with the given ID. |
+
+---
+
+## Appointment Management
+
+Administrators have a global view of every appointment and can update any appointment's status, including releasing the associated time slot when a cancellation occurs.
+
+### List Appointments
+
+**`GET /admin/citas`**
+
+<ParamField query="estado" type="string">
+  Filter by appointment status. Accepted values: `pendiente`, `completada`, `cancelada`, `no_asistio`.
+</ParamField>
+
+<ParamField query="fecha_desde" type="string">
+  Lower date bound (inclusive), format `YYYY-MM-DD`.
+</ParamField>
+
+<ParamField query="fecha_hasta" type="string">
+  Upper date bound (inclusive), format `YYYY-MM-DD`.
+</ParamField>
+
+<ParamField query="buscar" type="string">
+  Case-insensitive substring search (`ILIKE`) on patient and doctor names.
+</ParamField>
+
+Results are ordered by `fecha DESC`, `hora_inicio DESC`.
+
+<CodeGroup>
+```bash cURL — appointments for a date range
+curl -X GET "http://localhost:3000/admin/citas?fecha_desde=2025-01-01&fecha_hasta=2025-01-31&estado=pendiente" \
+  -H "Authorization: Bearer <admin_token>"
+```
+</CodeGroup>
+
+**Response `200 OK`** — array of full appointment objects including patient name, doctor name, specialty, and time-slot end time (`hora_fin`).
+
+---
+
+### Update Appointment Status
+
+**`PATCH /admin/citas/:id/estado`**
+
+<ParamField path="id" type="integer" required>
+  ID of the appointment to update.
+</ParamField>
+
+<ParamField body="estado" type="string" required>
+  New status. Accepted values: `pendiente`, `completada`, `cancelada`, `no_asistio`.
+</ParamField>
+
+<ParamField body="razon_cancelacion" type="string">
+  Optional cancellation reason. Recommended when `estado` is `cancelada`.
+</ParamField>
+
+<Tip>
+  When `estado` is set to `cancelada`, the linked time slot (`franja_horaria`) is automatically released by setting `disponible = TRUE`, making it bookable again by other patients.
+</Tip>
+
+<CodeGroup>
+```bash cURL — cancel an appointment
+curl -X PATCH http://localhost:3000/admin/citas/88/estado \
+  -H "Authorization: Bearer <admin_token>" \
+  -H "Content-Type: application/json" \
+  -d '{"estado": "cancelada", "razon_cancelacion": "Doctor unavailable"}'
+```
+
+```bash cURL — mark as completed
+curl -X PATCH http://localhost:3000/admin/citas/88/estado \
+  -H "Authorization: Bearer <admin_token>" \
+  -H "Content-Type: application/json" \
+  -d '{"estado": "completada"}'
+```
+</CodeGroup>
+
+**Response `200 OK`**
+
+<ResponseField name="mensaje" type="string">
+  Human-readable confirmation of the status change.
+</ResponseField>
+
+**Error responses**
+
+| Status | Condition |
+|--------|-----------|
+| `400`  | Invalid `estado` value supplied. |
+| `404`  | No appointment found with the given ID. |
+
+---
+
+## Schedule Management
+
+Administrators can create, update, and delete individual 40-minute time slots (`franjas_horarias`) for any doctor, or generate an entire day's schedule in a single bulk request.
+
+### Get Schedules (FullCalendar format)
+
+**`GET /admin/horarios`**
+
+Returns schedule events formatted for [FullCalendar](https://fullcalendar.io/). Each event represents one `franja_horaria` and is color-coded by availability/appointment status.
+
+<ParamField query="inicio" type="string">
+  Start date of the range to fetch, format `YYYY-MM-DD`.
+</ParamField>
+
+<ParamField query="fin" type="string">
+  End date of the range to fetch, format `YYYY-MM-DD`.
+</ParamField>
+
+<ParamField query="id_medico" type="integer">
+  Filter events to a specific doctor.
+</ParamField>
+
+<CodeGroup>
+```bash cURL
+curl -X GET "http://localhost:3000/admin/horarios?inicio=2025-06-01&fin=2025-06-07&id_medico=5" \
+  -H "Authorization: Bearer <admin_token>"
+```
+</CodeGroup>
+
+**Response `200 OK`** — array of FullCalendar event objects.
+
+<ResponseField name="[]" type="array">
+  <Expandable title="Event object fields">
+    <ResponseField name="id" type="integer">Franja ID.</ResponseField>
+    <ResponseField name="title" type="string">Display title for the calendar event.</ResponseField>
+    <ResponseField name="start" type="string">ISO 8601 start datetime.</ResponseField>
+    <ResponseField name="end" type="string">ISO 8601 end datetime.</ResponseField>
+    <ResponseField name="backgroundColor" type="string">Hex color for the event background. Green (`#1A7A52`) when available; varies by appointment status when booked.</ResponseField>
+    <ResponseField name="borderColor" type="string">Hex color for the event border (matches `backgroundColor`).</ResponseField>
+    <ResponseField name="extendedProps" type="object">
+      Additional metadata for the event.
+      <Expandable title="extendedProps fields">
+        <ResponseField name="extendedProps.disponible" type="boolean">Whether the slot is currently bookable.</ResponseField>
+        <ResponseField name="extendedProps.id_medico" type="integer">ID of the doctor this slot belongs to.</ResponseField>
+        <ResponseField name="extendedProps.medico_nombre" type="string">Full name of the doctor.</ResponseField>
+        <ResponseField name="extendedProps.especialidad" type="string">Doctor's specialty.</ResponseField>
+        <ResponseField name="extendedProps.cita_id" type="integer">ID of the linked appointment, if booked.</ResponseField>
+        <ResponseField name="extendedProps.cita_estado" type="string">Status key of the linked appointment, if booked.</ResponseField>
+        <ResponseField name="extendedProps.cita_estado_label" type="string">Human-readable label for the appointment status.</ResponseField>
+        <ResponseField name="extendedProps.paciente" type="string">Patient's name, if the slot is booked.</ResponseField>
+      </Expandable>
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+---
+
+### Create a Single Slot
+
+**`POST /admin/horarios`**
+
+Creates one 40-minute time slot for a doctor.
+
+<ParamField body="id_medico" type="integer" required>
+  ID of the doctor this slot belongs to.
+</ParamField>
+
+<ParamField body="fecha" type="string" required>
+  Date of the slot, format `YYYY-MM-DD`.
+</ParamField>
+
+<ParamField body="hora_inicio" type="string" required>
+  Start time of the slot, format `HH:MM`.
+</ParamField>
+
+<ParamField body="hora_fin" type="string" required>
+  End time of the slot, format `HH:MM`. Must be exactly 40 minutes after `hora_inicio`.
+</ParamField>
+
+<CodeGroup>
+```bash cURL
+curl -X POST http://localhost:3000/admin/horarios \
+  -H "Authorization: Bearer <admin_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id_medico": 5,
+    "fecha": "2025-06-10",
+    "hora_inicio": "09:00",
+    "hora_fin": "09:40"
+  }'
+```
+</CodeGroup>
+
+**Response `201 Created`**
+
+<ResponseField name="mensaje" type="string">
+  `"Franja creada."`
+</ResponseField>
+
+<ResponseField name="franja" type="object">
+  The newly created slot.
+  <Expandable title="franja fields">
+    <ResponseField name="franja.id" type="integer">Slot ID.</ResponseField>
+    <ResponseField name="franja.id_medico" type="integer">Doctor ID.</ResponseField>
+    <ResponseField name="franja.fecha" type="string">Date (`YYYY-MM-DD`).</ResponseField>
+    <ResponseField name="franja.hora_inicio" type="string">Start time (`HH:MM`).</ResponseField>
+    <ResponseField name="franja.hora_fin" type="string">End time (`HH:MM`).</ResponseField>
+    <ResponseField name="franja.disponible" type="boolean">Always `true` for a newly created slot.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+**Error responses**
+
+| Status | Condition |
+|--------|-----------|
+| `409`  | A slot with the same doctor, date, and time already exists (unique constraint violation). |
+
+---
+
+### Bulk Generate Slots
+
+**`POST /admin/horarios/masivo`**
+
+Automatically generates all 40-minute slots that fit within a workday window, optionally skipping a break period. This is the recommended way to populate a full day's schedule.
+
+<Info>
+  Slot duration is fixed at **40 minutes**. The generator advances the cursor by 40 minutes at a time from `hora_inicio` until there is no room for another full slot before `hora_fin`. Any slot window that falls entirely within `inicio_descanso`–`fin_descanso` is skipped.
+</Info>
+
+<ParamField body="id_medico" type="integer" required>
+  ID of the doctor for whom slots are generated.
+</ParamField>
+
+<ParamField body="fecha" type="string" required>
+  Date for the generated slots, format `YYYY-MM-DD`.
+</ParamField>
+
+<ParamField body="hora_inicio" type="string" required>
+  Workday start time, format `HH:MM`.
+</ParamField>
+
+<ParamField body="hora_fin" type="string" required>
+  Workday end time, format `HH:MM`. The range must accommodate at least one 40-minute slot.
+</ParamField>
+
+<ParamField body="inicio_descanso" type="string">
+  Break start time, format `HH:MM`. Must fall within the workday window.
+</ParamField>
+
+<ParamField body="fin_descanso" type="string">
+  Break end time, format `HH:MM`. Must fall within the workday window and be after `inicio_descanso`.
+</ParamField>
+
+**Full workday example — 08:00 to 17:00 with a lunch break from 12:00 to 13:00**
+
+The generator produces the following slots (each 40 minutes long), automatically skipping the break window:
+
+```text
+Morning block:  08:00–08:40 · 08:40–09:20 · 09:20–10:00
+                10:00–10:40 · 10:40–11:20 · 11:20–12:00
+
+[break:         12:00–13:00  — skipped]
+
+Afternoon block: 13:00–13:40 · 13:40–14:20 · 14:20–15:00
+                 15:00–15:40 · 15:40–16:20 · 16:20–17:00
+```
+
+Total: **12 slots** generated.
+
+<CodeGroup>
+```bash cURL — full workday with lunch break
+curl -X POST http://localhost:3000/admin/horarios/masivo \
+  -H "Authorization: Bearer <admin_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id_medico": 5,
+    "fecha": "2025-06-10",
+    "hora_inicio": "08:00",
+    "hora_fin": "17:00",
+    "inicio_descanso": "12:00",
+    "fin_descanso": "13:00"
+  }'
+```
+
+```bash cURL — morning only (no break)
+curl -X POST http://localhost:3000/admin/horarios/masivo \
+  -H "Authorization: Bearer <admin_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id_medico": 5,
+    "fecha": "2025-06-11",
+    "hora_inicio": "08:00",
+    "hora_fin": "12:00"
+  }'
+```
+</CodeGroup>
+
+**Response `201 Created`**
+
+<ResponseField name="mensaje" type="string">
+  Human-readable summary of the operation (e.g. `"12 franjas creadas, 0 duplicadas."`).
+</ResponseField>
+
+<ResponseField name="insertadas" type="integer">
+  Number of new slots successfully inserted into the database.
+</ResponseField>
+
+<ResponseField name="duplicadas" type="integer">
+  Number of slots skipped because they already existed (unique constraint).
+</ResponseField>
+
+<ResponseField name="total" type="integer">
+  Total slots attempted (`insertadas + duplicadas`).
+</ResponseField>
+
+**Error responses**
+
+| Status | Condition |
+|--------|-----------|
+| `400`  | The time range is too short to fit a single 40-minute slot. |
+| `400`  | Break window (`inicio_descanso`/`fin_descanso`) falls outside the workday boundaries. |
+
+---
+
+### Update a Slot
+
+**`PUT /admin/horarios/:id`**
+
+Updates the date and/or times of an existing slot. The updated slot must still be exactly 40 minutes long, and it must not overlap with any other slot for the same doctor on the same date.
+
+<ParamField path="id" type="integer" required>
+  ID of the slot to update.
+</ParamField>
+
+<ParamField body="fecha" type="string">
+  New date for the slot, format `YYYY-MM-DD`.
+</ParamField>
+
+<ParamField body="hora_inicio" type="string">
+  New start time, format `HH:MM`.
+</ParamField>
+
+<ParamField body="hora_fin" type="string">
+  New end time, format `HH:MM`. Must be exactly 40 minutes after `hora_inicio`.
+</ParamField>
+
+<Warning>
+  A slot linked to an **active appointment** cannot be edited. Attempting to do so returns `400 Bad Request`.
+</Warning>
+
+<CodeGroup>
+```bash cURL
+curl -X PUT http://localhost:3000/admin/horarios/101 \
+  -H "Authorization: Bearer <admin_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "fecha": "2025-06-10",
+    "hora_inicio": "10:00",
+    "hora_fin": "10:40"
+  }'
+```
+</CodeGroup>
+
+**Response `200 OK`**
+
+<ResponseField name="mensaje" type="string">
+  Confirmation message.
+</ResponseField>
+
+<ResponseField name="franja" type="object">
+  The updated slot object with the same shape as the `franja` returned by `POST /admin/horarios`.
+</ResponseField>
+
+**Error responses**
+
+| Status | Condition |
+|--------|-----------|
+| `400`  | Slot has an active appointment and cannot be modified. |
+| `400`  | Duration is not exactly 40 minutes. |
+| `409`  | The new time window overlaps with an existing slot for the same doctor on the same date. |
+| `404`  | Slot not found. |
+
+---
+
+### Delete a Slot
+
+**`DELETE /admin/horarios/:id`**
+
+Permanently removes a time slot from the database.
+
+<ParamField path="id" type="integer" required>
+  ID of the slot to delete.
+</ParamField>
+
+<Warning>
+  A slot linked to an **active appointment** cannot be deleted. Attempting to do so returns `400 Bad Request`.
+</Warning>
+
+<CodeGroup>
+```bash cURL
+curl -X DELETE http://localhost:3000/admin/horarios/101 \
+  -H "Authorization: Bearer <admin_token>"
+```
+</CodeGroup>
+
+**Response `200 OK`**
+
+<ResponseField name="mensaje" type="string">
+  `"Franja eliminada."`
+</ResponseField>
+
+**Error responses**
+
+| Status | Condition |
+|--------|-----------|
+| `400`  | Slot has an active appointment and cannot be deleted. |
+| `404`  | Slot not found. |
+
+---
+
+## Specialty Management
+
+Administrators control the specialty catalog that doctors are associated with and patients browse when booking appointments.
+
+### Create a Specialty
+
+**`POST /admin/especialidades`**
+
+<ParamField body="nombre" type="string" required>
+  Unique name of the specialty (e.g. `"Cardiología"`). Stored as-is; duplicate names return `409`.
+</ParamField>
+
+<ParamField body="descripcion" type="string">
+  Short description shown to patients.
+</ParamField>
+
+<ParamField body="precio_base" type="number">
+  Base consultation price for this specialty.
+</ParamField>
+
+<ParamField body="icono" type="string">
+  URL or path of the specialty's icon/image. Maps to `imagen_url` in the database.
+</ParamField>
+
+<CodeGroup>
+```bash cURL
+curl -X POST http://localhost:3000/admin/especialidades \
+  -H "Authorization: Bearer <admin_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nombre": "Cardiología",
+    "descripcion": "Diagnóstico y tratamiento de enfermedades del corazón.",
+    "precio_base": 120.00,
+    "icono": "https://cdn.example.com/icons/cardiology.svg"
+  }'
+```
+</CodeGroup>
+
+**Response `201 Created`**
+
+<ResponseField name="mensaje" type="string">Confirmation message.</ResponseField>
+<ResponseField name="especialidad" type="object">The newly created specialty record.</ResponseField>
+
+**Error responses**
+
+| Status | Condition |
+|--------|-----------|
+| `409`  | A specialty with the same `nombre` already exists. |
+
+---
+
+### Update a Specialty
+
+**`PUT /admin/especialidades/:id`**
+
+<ParamField path="id" type="integer" required>
+  ID of the specialty to update.
+</ParamField>
+
+<ParamField body="nombre" type="string">
+  New name for the specialty.
+</ParamField>
+
+<ParamField body="descripcion" type="string">
+  Updated description.
+</ParamField>
+
+<ParamField body="precio_base" type="number">
+  Updated base price.
+</ParamField>
+
+<ParamField body="icono" type="string">
+  Updated icon URL. Maps to `imagen_url` in the database.
+</ParamField>
+
+<CodeGroup>
+```bash cURL
+curl -X PUT http://localhost:3000/admin/especialidades/3 \
+  -H "Authorization: Bearer <admin_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nombre": "Cardiología Intervencionista",
+    "precio_base": 150.00
+  }'
+```
+</CodeGroup>
+
+**Response `200 OK`**
+
+<ResponseField name="mensaje" type="string">Confirmation message.</ResponseField>
+<ResponseField name="especialidad" type="object">The updated specialty record.</ResponseField>
+
+---
+
+### Toggle Specialty Status
+
+**`PATCH /admin/especialidades/:id/estado`**
+
+Toggles the `activa` boolean of the specialty. Deactivating a specialty hides it from patient-facing catalog views without deleting it.
+
+<ParamField path="id" type="integer" required>
+  ID of the specialty to toggle.
+</ParamField>
+
+<CodeGroup>
+```bash cURL
+curl -X PATCH http://localhost:3000/admin/especialidades/3/estado \
+  -H "Authorization: Bearer <admin_token>"
+```
+</CodeGroup>
+
+**Response `200 OK`**
+
+<ResponseField name="mensaje" type="string">
+  `"Especialidad activada."` or `"Especialidad desactivada."`.
+</ResponseField>
+
+---
+
+## Medication Management
+
+Administrators maintain the medication catalog used by doctors when creating prescriptions and clinical records.
+
+### Create a Medication
+
+**`POST /admin/medicamentos`**
+
+<ParamField body="nombre" type="string" required>
+  Commercial name of the medication. Maps to `nombre_comercial` in the database.
+</ParamField>
+
+<ParamField body="tipo" type="string" required>
+  Medication class. Accepted values: `OTC` (over-the-counter), `Rx` (prescription-only).
+</ParamField>
+
+<ParamField body="principio" type="string">
+  Active ingredient(s). Maps to both `principio_activo` and `principio_activa` columns in the database.
+</ParamField>
+
+<ParamField body="descripcion" type="string">
+  Free-text description of the medication.
+</ParamField>
+
+<ParamField body="presentacion" type="string">
+  Physical form / presentations (e.g. `"Tabletas 500 mg"`). Maps to `presentaciones` in the database.
+</ParamField>
+
+<ParamField body="activo" type="boolean">
+  Whether the medication is active in the catalog. Defaults to `true`.
+</ParamField>
+
+<ParamField body="laboratorio" type="string">
+  Name of the pharmaceutical laboratory.
+</ParamField>
+
+<ParamField body="id_especialidad" type="integer">
+  Optional link to a specialty (used for catalog filtering).
+</ParamField>
+
+<ParamField body="imagen_url" type="string">
+  URL of the medication's product image.
+</ParamField>
+
+<CodeGroup>
+```bash cURL
+curl -X POST http://localhost:3000/admin/medicamentos \
+  -H "Authorization: Bearer <admin_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nombre": "Ibuprofeno 400",
+    "tipo": "OTC",
+    "principio": "Ibuprofeno",
+    "descripcion": "Antiinflamatorio no esteroideo de uso general.",
+    "presentacion": "Tabletas 400 mg",
+    "laboratorio": "Genfar",
+    "id_especialidad": 7
+  }'
+```
+</CodeGroup>
+
+**Response `201 Created`**
+
+<ResponseField name="mensaje" type="string">
+  `"Medicamento guardado con éxito."`
+</ResponseField>
+
+<ResponseField name="medicamento" type="object">
+  The newly created medication record as stored in the database.
+</ResponseField>
+
+---
+
+### Update a Medication
+
+**`PUT /admin/medicamentos/:id`**
+
+Accepts the same body fields as `POST /admin/medicamentos` and replaces the existing record.
+
+<ParamField path="id" type="integer" required>
+  ID of the medication to update.
+</ParamField>
+
+<ParamField body="nombre" type="string">
+  Updated commercial name. Maps to `nombre_comercial`.
+</ParamField>
+
+<ParamField body="tipo" type="string">
+  Updated medication class: `OTC` or `Rx`.
+</ParamField>
+
+<ParamField body="principio" type="string">
+  Updated active ingredient. Maps to `principio_activo` / `principio_activa`.
+</ParamField>
+
+<ParamField body="descripcion" type="string">
+  Updated description.
+</ParamField>
+
+<ParamField body="presentacion" type="string">
+  Updated presentations. Maps to `presentaciones`.
+</ParamField>
+
+<ParamField body="activo" type="boolean">
+  Active status of the medication.
+</ParamField>
+
+<ParamField body="laboratorio" type="string">
+  Updated laboratory name.
+</ParamField>
+
+<ParamField body="id_especialidad" type="integer">
+  Updated specialty link.
+</ParamField>
+
+<ParamField body="imagen_url" type="string">
+  Updated product image URL.
+</ParamField>
+
+<CodeGroup>
+```bash cURL
+curl -X PUT http://localhost:3000/admin/medicamentos/12 \
+  -H "Authorization: Bearer <admin_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nombre": "Ibuprofeno 600",
+    "presentacion": "Tabletas 600 mg",
+    "tipo": "Rx"
+  }'
+```
+</CodeGroup>
+
+**Response `200 OK`**
+
+<ResponseField name="mensaje" type="string">Confirmation message.</ResponseField>
+<ResponseField name="medicamento" type="object">The updated medication record.</ResponseField>
+
+---
+
+### Toggle Medication Status
+
+**`PATCH /admin/medicamentos/:id/estado`**
+
+Toggles (or explicitly sets) the `activo` boolean of a medication. Deactivated medications remain in the database for historical prescription records but are hidden from active catalog views.
+
+<ParamField path="id" type="integer" required>
+  ID of the medication to toggle.
+</ParamField>
+
+<ParamField body="activo" type="boolean">
+  Optional explicit value. If omitted, the current value is toggled automatically.
+</ParamField>
+
+<CodeGroup>
+```bash cURL — toggle
+curl -X PATCH http://localhost:3000/admin/medicamentos/12/estado \
+  -H "Authorization: Bearer <admin_token>"
+```
+
+```bash cURL — explicit deactivation
+curl -X PATCH http://localhost:3000/admin/medicamentos/12/estado \
+  -H "Authorization: Bearer <admin_token>" \
+  -H "Content-Type: application/json" \
+  -d '{"activo": false}'
+```
+</CodeGroup>
+
+**Response `200 OK`**
+
+<ResponseField name="mensaje" type="string">
+  Human-readable confirmation of the status change.
+</ResponseField>
+
+**Error responses**
+
+| Status | Condition |
+|--------|-----------|
+| `404`  | No medication found with the given ID. |

@@ -1,0 +1,73 @@
+---
+title: "MELIKA: Digital Health Platform Overview"
+sidebarTitle: "Introduction"
+description: "MELIKA is a role-based healthcare platform for booking appointments, managing clinical records, and coordinating doctors — built on Node.js, React, and PostgreSQL."
+---
+
+MELIKA is a full-stack digital health platform designed to streamline the entire care journey — from a patient booking their first appointment to a doctor updating a clinical record and an administrator managing the medical roster. This page introduces what MELIKA is, what it can do, who uses it, and the technical and regulatory foundations it is built on.
+
+## What MELIKA Does
+
+MELIKA covers the core workflows of a modern outpatient clinic in a single, integrated application:
+
+- **Appointment booking** — patients browse available time slots per specialty and doctor, and the platform prevents double-bookings through database-level concurrency guards.
+- **Clinical record management** — doctors create, read, and update structured clinical histories including prescribed medications stored as JSONB.
+- **PDF document generation** — clinical summaries, prescriptions, and clarifications are rendered as downloadable PDFs directly in the browser via `@react-pdf/renderer`.
+- **Doctor and specialty administration** — administrators manage the doctor catalogue, medical specialties, and invitation-based onboarding.
+- **Role-based access control** — every API route and every client-side page is gated behind a verified JWT and a role check, keeping patient data visible only to authorised users.
+- **Audit logging** — every mutation to the `citas` (appointments) table is captured automatically in an immutable `logs_citas` table via a PL/pgSQL trigger.
+
+## User Roles
+
+MELIKA has three distinct roles, each with its own dashboard, routes, and permissions.
+
+| Role | Key Capabilities |
+|---|---|
+| **Paciente** (Patient) | Register an account, verify email, browse specialties and doctors, book and cancel appointments, view personal clinical history, download PDF summaries. |
+| **Médico** (Doctor) | Log in via admin invitation, view daily schedule on a FullCalendar interface, manage availability slots, create and update clinical records, generate prescriptions and clarification forms. |
+| **Admin** | Manage the full doctor catalogue and specialties, create doctor accounts via invitation tokens, view platform-wide appointment logs, and configure operating hours. |
+
+<Note>
+  Doctor accounts are never self-registered. An administrator generates a one-time invitation token, which is emailed to the doctor and used to complete the sign-up flow. This is enforced by the `tokens_invitacion` table and verified before account creation.
+</Note>
+
+## Technology Stack
+
+| Layer | Technology | Version |
+|---|---|---|
+| **Frontend framework** | React | 19.x |
+| **Build tool** | Vite | 8.x |
+| **Client routing** | React Router DOM | 7.x |
+| **Calendar UI** | FullCalendar (daygrid, timegrid, interaction) | 6.x |
+| **PDF rendering** | @react-pdf/renderer + @pdfslick/react | 4.x |
+| **Backend runtime** | Node.js | ≥ 20 |
+| **Backend framework** | Express | 5.x |
+| **Database** | PostgreSQL (via `pg.Pool`) | — |
+| **Authentication** | JSON Web Tokens (`jsonwebtoken`) + `bcrypt` | — |
+| **Email** | Nodemailer + Google APIs (Gmail OAuth2) | — |
+| **Deployment** | Railway (frontend + backend + database) | — |
+
+## Non-Functional Requirements
+
+MELIKA is built with three cross-cutting concerns that shape every implementation decision:
+
+- **Accessibility** — the UI targets WCAG 2.1 Level AA compliance, using semantic HTML, sufficient colour contrast, and keyboard-navigable components throughout.
+- **Security** — the system follows the principles of ISO/IEC 27003 for information-security risk management: least-privilege role guards on every route, secrets stored only in environment variables, CORS restricted to declared origins, and JWTs verified on every protected request.
+- **Data protection** — as a Colombian healthcare application processing sensitive personal data, MELIKA is designed to comply with **Ley 1581 de 2012** (Estatuto de Protección de Datos Personales), including obtaining informed consent during registration and limiting data access to authorised roles.
+
+## Explore the Documentation
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="bolt" href="/quickstart">
+    Clone the repo, configure environment variables, and have a fully working local instance running in under 10 minutes.
+  </Card>
+  <Card title="Architecture" icon="diagram-project" href="/architecture">
+    Understand how the React client, Express API, and PostgreSQL database connect — including the auth flow and database schema.
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/authentication">
+    Explore every REST endpoint, required headers, request bodies, and response shapes.
+  </Card>
+  <Card title="Deployment" icon="rocket" href="/deployment">
+    Deploy MELIKA to Railway with a production PostgreSQL instance and environment variable configuration.
+  </Card>
+</CardGroup>

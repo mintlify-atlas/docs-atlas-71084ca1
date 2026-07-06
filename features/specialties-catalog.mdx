@@ -1,0 +1,197 @@
+---
+title: "Medical Specialties Catalog and Doctor Availability"
+sidebarTitle: "Specialties"
+description: "MELIKA's specialty catalog maps medical disciplines to active doctors, exposing real-time daily and range-based availability queries for appointment booking."
+---
+
+MELIKA organizes its medical network around a specialty catalog that connects disciplines to their associated doctors and drives the entire availability-checking workflow. Every doctor in the system (`medicos` table) is linked to exactly one specialty via a foreign key (`medicos.id_especialidad`), and the platform exposes both single-day and date-range availability queries that integrate directly with FullCalendar on the frontend. Only specialties marked `activa = TRUE` are returned through the public API.
+
+## Available Specialties
+
+MELIKA currently supports the following medical and health disciplines:
+
+<CardGroup cols={3}>
+  <Card title="Cardiología" icon="heart-pulse" />
+  <Card title="Dermatología" icon="hand-dots" />
+  <Card title="Ginecología" icon="venus" />
+  <Card title="Medicina General" icon="stethoscope" />
+  <Card title="Neurología" icon="brain" />
+  <Card title="Nutrición" icon="apple-whole" />
+  <Card title="Oftalmología" icon="eye" />
+  <Card title="Ortopedia" icon="bone" />
+  <Card title="Otorrinolaringología" icon="ear" />
+  <Card title="Pediatría" icon="baby" />
+  <Card title="Psiquiatría" icon="head-side-brain" />
+  <Card title="Urología" icon="kidneys" />
+  <Card title="Veterinaria" icon="paw" />
+</CardGroup>
+
+## Specialty Data Model
+
+Each specialty record exposes the following fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `integer` | Unique identifier for the specialty |
+| `nombre` | `varchar` | Display name of the specialty (e.g., `"Cardiología"`) |
+| `descripcion` | `text` | Plain-language description of the discipline |
+| `precio_base` | `numeric` | Base consultation price for this specialty |
+| `imagen_url` | `varchar` | URL to the specialty's cover image |
+| `activa` | `boolean` | When `FALSE`, the specialty is hidden from all public endpoints |
+
+## Listing Active Specialties
+
+The specialties listing endpoint is **public** — no authentication is required. It returns only specialties where `activa = TRUE`.
+
+```http
+GET /especialidades
+```
+
+Example response:
+
+```json
+[
+  {
+    "id": 1,
+    "nombre": "Cardiología",
+    "descripcion": "Diagnóstico y tratamiento de enfermedades del corazón y sistema cardiovascular",
+    "precio_base": "120.00",
+    "imagen_url": "https://storage.melika.app/especialidades/cardiologia.jpg",
+    "activa": true
+  },
+  {
+    "id": 2,
+    "nombre": "Dermatología",
+    "descripcion": "Atención médica para afecciones de piel, cabello y uñas",
+    "precio_base": "95.00",
+    "imagen_url": "https://storage.melika.app/especialidades/dermatologia.jpg",
+    "activa": true
+  }
+]
+```
+
+## Doctors per Specialty
+
+To list all active doctors within a specialty, query the specialty's doctor endpoint. The response includes rich profile data for each physician.
+
+```http
+GET /especialidades/:id/medicos
+```
+
+### Doctor Profile Fields
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | `integer` | Doctor's unique ID |
+| `nombre` | `varchar` | Full name |
+| `foto_url` | `varchar` | URL to the doctor's profile photo |
+| `tarifa` | `numeric` | Doctor's per-consultation fee |
+| `calificacion` | `numeric` | Average star rating (e.g., `4.8`) |
+| `acepta_teleconsulta` | `boolean` | Whether the doctor offers video consultations |
+| `acepta_presencial` | `boolean` | Whether the doctor accepts in-person visits |
+| `biografia` | `text` | Short professional biography |
+| `anos_experiencia` | `integer` | Years of clinical experience |
+
+Example response item:
+
+```json
+{
+  "id": 3,
+  "nombre": "Dra. Laura Méndez",
+  "foto_url": "https://storage.melika.app/medicos/laura-mendez.jpg",
+  "tarifa": "130.00",
+  "calificacion": 4.9,
+  "acepta_teleconsulta": true,
+  "acepta_presencial": true,
+  "biografia": "Cardióloga con 12 años de experiencia en cardiología intervencionista y prevención cardiovascular.",
+  "anos_experiencia": 12
+}
+```
+
+## Checking Doctor Availability
+
+MELIKA provides two availability endpoints — one for a single day and one for a date range — both powered by the `franjas_horarias` table where each slot is 40 minutes long.
+
+<Tabs>
+  <Tab title="Single Day">
+    Returns available time slots (`franjas_horarias`) for a specific doctor on a given date. Use this to power a day-level slot picker.
+
+    ```http
+    GET /especialidades/disponibilidad?medico_id=3&fecha=2025-08-15
+    ```
+
+    Example response:
+
+    ```json
+    [
+      {
+        "id": 14,
+        "hora_inicio": "09:00",
+        "hora_fin": "09:40",
+        "disponible": true
+      },
+      {
+        "id": 15,
+        "hora_inicio": "09:40",
+        "hora_fin": "10:20",
+        "disponible": true
+      },
+      {
+        "id": 16,
+        "hora_inicio": "10:20",
+        "hora_fin": "11:00",
+        "disponible": false
+      }
+    ]
+    ```
+
+    <Note>
+      Slots where `disponible = false` are already booked and should be rendered as disabled in the booking UI.
+    </Note>
+  </Tab>
+  <Tab title="Date Range">
+    Returns FullCalendar-compatible event objects covering a span of dates. Use this to populate a calendar view showing when a doctor is available across multiple weeks or months.
+
+    ```http
+    GET /especialidades/disponibilidad-rango?medico_id=3&inicio=2025-08-01&fin=2025-08-31
+    ```
+
+    Example response item:
+
+    ```json
+    {
+      "id": "franja-14-2025-08-15",
+      "title": "Disponible",
+      "start": "2025-08-15T09:00:00",
+      "end": "2025-08-15T09:40:00",
+      "backgroundColor": "#1A7A52",
+      "borderColor": "#1A7A52"
+    }
+    ```
+
+    Pass the array directly to FullCalendar's `events` prop for a fully rendered availability calendar.
+  </Tab>
+</Tabs>
+
+## How Specialties Connect to the Booking Flow
+
+The specialty catalog is the entry point for every appointment booking. The connection between specialties, doctors, slots, and appointments follows this hierarchy:
+
+<Steps>
+  <Step title="Select a Specialty">
+    Patient browses `GET /especialidades` and picks a discipline. The `id` and `precio_base` are retained for the booking payload.
+  </Step>
+  <Step title="Choose a Doctor">
+    Patient calls `GET /especialidades/:id/medicos` to see available physicians, their ratings, fees, and consultation modalities.
+  </Step>
+  <Step title="Query Available Slots">
+    Patient calls `GET /especialidades/disponibilidad?medico_id=&fecha=` to retrieve open `franjas_horarias` for the chosen doctor on their preferred date.
+  </Step>
+  <Step title="Book the Appointment">
+    Patient submits `POST /citas` with `id_especialidad`, `id_medico`, `id_franja`, `fecha`, and `hora_inicio`. The `franjas_horaria` is reserved immediately with concurrency protection.
+  </Step>
+</Steps>
+
+<Tip>
+  When building the booking UI, call the range availability endpoint first to show a calendar overview, then switch to the single-day endpoint when the user selects a specific date to display the granular slot picker.
+</Tip>

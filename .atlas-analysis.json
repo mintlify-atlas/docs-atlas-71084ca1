@@ -1,0 +1,165 @@
+{
+  "projectType": "saas",
+  "projectName": "MELIKA",
+  "projectDescription": "MELIKA is a full-stack digital health platform for managing medical appointments, clinical records, doctors, specialties, and medications — designed for patients, physicians, and clinic administrators.",
+  "theme": "almond",
+  "primaryColor": "#3B6EE8",
+  "lightColor": "#F6F9FF",
+  "darkColor": "#0B1A36",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Overview",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "architecture"
+            ]
+          },
+          {
+            "group": "Core Features",
+            "pages": [
+              "features/appointments",
+              "features/clinical-records",
+              "features/specialties-catalog",
+              "features/medications-catalog"
+            ]
+          },
+          {
+            "group": "User Roles",
+            "pages": [
+              "roles/patient",
+              "roles/doctor",
+              "roles/admin"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Authentication",
+            "pages": [
+              "api/authentication",
+              "api/auth-middleware"
+            ]
+          },
+          {
+            "group": "Appointments",
+            "pages": [
+              "api/appointments"
+            ]
+          },
+          {
+            "group": "Doctors & Schedules",
+            "pages": [
+              "api/doctors",
+              "api/schedules"
+            ]
+          },
+          {
+            "group": "Clinical Records",
+            "pages": [
+              "api/clinical-records"
+            ]
+          },
+          {
+            "group": "Catalog",
+            "pages": [
+              "api/specialties",
+              "api/medications"
+            ]
+          },
+          {
+            "group": "Admin",
+            "pages": [
+              "api/admin"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Deployment",
+        "groups": [
+          {
+            "group": "Setup & Deploy",
+            "pages": [
+              "deployment/environment",
+              "deployment/database",
+              "deployment/railway"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Role-based access control with three roles: patient, doctor, and administrator",
+    "Patient appointment booking with real-time slot availability",
+    "Clinical records management with diagnosis, treatment plans, and medication prescriptions (JSONB)",
+    "Doctor schedule management with 40-minute time slot engine and break support",
+    "Medication catalog with OTC/Rx classification and specialty filtering",
+    "Medical specialties catalog with doctor listings per specialty",
+    "Admin dashboard with platform-wide statistics and management tools",
+    "Email verification and password recovery via Gmail API / Nodemailer",
+    "PDF generation and viewing for clinical histories and prescriptions",
+    "PostgreSQL triggers for immutable audit logs on all appointment changes",
+    "Deployment on Railway with separate frontend (React/Vite) and backend (Node.js/Express) services"
+  ],
+  "publicApiSurface": [
+    "POST /auth/register",
+    "POST /auth/login",
+    "GET /auth/verify-code",
+    "POST /auth/reenviar-codigo",
+    "POST /auth/recuperar-password",
+    "POST /auth/nueva-password",
+    "GET /especialidades",
+    "GET /especialidades/:id/medicos",
+    "GET /especialidades/disponibilidad",
+    "GET /especialidades/disponibilidad-rango",
+    "GET /medicamentos",
+    "GET /medicamentos/:id",
+    "GET /medicamentos/categorias",
+    "GET /citas/mis-citas",
+    "GET /citas/calendario",
+    "POST /citas",
+    "PATCH /citas/:id",
+    "DELETE /citas/:id",
+    "GET /historias/paciente/:id_paciente",
+    "GET /historias/cita/:id_cita",
+    "POST /historias",
+    "PUT /historias/:id",
+    "POST /historias/:id/aclaracion",
+    "PATCH /historias/gestionar-cita/:id",
+    "GET /historias/documentos/paciente/:id_paciente",
+    "POST /historias/documentos",
+    "GET /medico/perfil",
+    "GET /medico/agenda",
+    "GET /medico/agenda/rango",
+    "POST /medico/franjas",
+    "GET /medico/franjas",
+    "PATCH /medico/franjas/:id",
+    "DELETE /medico/franjas/:id",
+    "POST /medicos/activar",
+    "GET /admin/stats",
+    "GET /admin/usuarios",
+    "PATCH /admin/usuarios/:id/estado",
+    "GET /admin/citas",
+    "PATCH /admin/citas/:id/estado",
+    "GET /admin/horarios",
+    "POST /admin/horarios",
+    "POST /admin/horarios/masivo",
+    "PUT /admin/horarios/:id",
+    "DELETE /admin/horarios/:id",
+    "POST /admin/especialidades",
+    "PUT /admin/especialidades/:id",
+    "PATCH /admin/especialidades/:id/estado",
+    "POST /admin/medicamentos",
+    "PUT /admin/medicamentos/:id",
+    "PATCH /admin/medicamentos/:id/estado"
+  ]
+}

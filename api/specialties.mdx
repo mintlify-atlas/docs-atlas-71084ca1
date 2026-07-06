@@ -1,0 +1,455 @@
+---
+title: "Specialties API — Medical Disciplines and Doctor Availability"
+sidebarTitle: "Specialties"
+description: "MELIKA's specialties endpoints expose the medical discipline catalog, list doctors by specialty, and provide daily and range-based availability queries for appointment booking."
+---
+
+The Specialties API is the entry point for appointment booking in MELIKA. It exposes the catalog of active medical disciplines, resolves which physicians practice each specialty, and provides availability data that integrates directly with FullCalendar for scheduling UIs. All specialties endpoints are public — no authentication token is required — making them suitable for patient-facing booking flows before a user is signed in.
+
+---
+
+## Data Model
+
+The `especialidades` table describes each medical discipline offered on the platform, including its pricing baseline and active status.
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | integer | Primary key |
+| `nombre` | VARCHAR | **UNIQUE.** Specialty name |
+| `descripcion` | TEXT | Description of the discipline |
+| `precio_base` | numeric | Base consultation price |
+| `imagen_url` | VARCHAR | URL to the specialty's cover image |
+| `activa` | boolean | Only `TRUE` records appear in public listings |
+| `created_at` | timestamp | Auto-generated |
+| `updated_at` | timestamp | Auto-updated |
+
+<Note>
+  The `GET /especialidades` endpoint returns **only active specialties** (`activa = TRUE`). Inactive disciplines are hidden from public listings and are accessible only via the admin route.
+</Note>
+
+---
+
+## Endpoints
+
+### GET /especialidades
+
+Returns the full list of active medical specialties available on the platform. This is the primary endpoint for populating specialty selector UIs in patient booking flows.
+
+**Authentication:** None (public)
+
+<ResponseField name="[].id" type="integer">
+  Specialty identifier.
+</ResponseField>
+<ResponseField name="[].nombre" type="string">
+  Unique specialty name (e.g. `"Cardiología"`, `"Pediatría"`).
+</ResponseField>
+<ResponseField name="[].descripcion" type="string">
+  Description of the medical discipline.
+</ResponseField>
+<ResponseField name="[].precio_base" type="number">
+  Base consultation price for this specialty.
+</ResponseField>
+<ResponseField name="[].imagen_url" type="string">
+  URL to the specialty's cover image.
+</ResponseField>
+<ResponseField name="[].activa" type="boolean">
+  Always `true` in this response (inactive specialties are filtered out).
+</ResponseField>
+
+<CodeGroup>
+```bash cURL
+curl -X GET http://localhost:3000/especialidades
+```
+
+```js JavaScript
+const res = await fetch('http://localhost:3000/especialidades');
+const specialties = await res.json();
+```
+</CodeGroup>
+
+**Example response:**
+
+```json
+[
+  {
+    "id": 1,
+    "nombre": "Cardiología",
+    "descripcion": "Diagnóstico y tratamiento de enfermedades del corazón y sistema cardiovascular.",
+    "precio_base": "75.00",
+    "imagen_url": "https://storage.example.com/specialties/cardiologia.jpg",
+    "activa": true
+  },
+  {
+    "id": 2,
+    "nombre": "Pediatría",
+    "descripcion": "Atención médica integral para niños y adolescentes.",
+    "precio_base": "60.00",
+    "imagen_url": "https://storage.example.com/specialties/pediatria.jpg",
+    "activa": true
+  }
+]
+```
+
+---
+
+### GET /especialidades/admin
+
+Returns all specialties — including inactive ones — for administrative management interfaces. This route is intended for admin dashboards where operators need to view, enable, or disable disciplines.
+
+**Authentication:** None at route level (enforced at the admin layer)
+
+<ResponseField name="[].id" type="integer">Specialty identifier.</ResponseField>
+<ResponseField name="[].nombre" type="string">Specialty name.</ResponseField>
+<ResponseField name="[].descripcion" type="string">Discipline description.</ResponseField>
+<ResponseField name="[].precio_base" type="number">Base consultation price.</ResponseField>
+<ResponseField name="[].imagen_url" type="string">Cover image URL.</ResponseField>
+<ResponseField name="[].activa" type="boolean">Active status — includes both `true` and `false` records.</ResponseField>
+
+<CodeGroup>
+```bash cURL
+curl -X GET http://localhost:3000/especialidades/admin
+```
+</CodeGroup>
+
+---
+
+### GET /especialidades/:id/medicos
+
+Returns all physicians who practice a given specialty, along with their professional profile data. Use this endpoint to populate doctor selection UIs after a patient has chosen a specialty.
+
+**Authentication:** None (public)
+
+<ParamField path="id" type="integer" required>
+  The specialty ID for which to retrieve the list of affiliated physicians.
+</ParamField>
+
+<ResponseField name="[].id" type="integer">
+  Physician user identifier.
+</ResponseField>
+<ResponseField name="[].nombre" type="string">
+  Physician's first name.
+</ResponseField>
+<ResponseField name="[].primer_apellido" type="string">
+  Physician's first surname.
+</ResponseField>
+<ResponseField name="[].email" type="string">
+  Physician's contact email.
+</ResponseField>
+<ResponseField name="[].especialidad" type="string">
+  Name of the physician's specialty.
+</ResponseField>
+<ResponseField name="[].numero_registro" type="string">
+  Professional medical registration number.
+</ResponseField>
+<ResponseField name="[].tarifa" type="number">
+  The physician's individual consultation fee.
+</ResponseField>
+<ResponseField name="[].calificacion" type="number">
+  Average patient rating score.
+</ResponseField>
+<ResponseField name="[].acepta_teleconsulta" type="boolean">
+  Whether the physician offers teleconsultation appointments.
+</ResponseField>
+<ResponseField name="[].acepta_presencial" type="boolean">
+  Whether the physician offers in-person appointments.
+</ResponseField>
+<ResponseField name="[].biografia" type="string">
+  Short professional biography.
+</ResponseField>
+<ResponseField name="[].anos_experiencia" type="integer">
+  Years of clinical experience.
+</ResponseField>
+<ResponseField name="[].foto_url" type="string">
+  URL to the physician's profile photo.
+</ResponseField>
+
+<CodeGroup>
+```bash cURL
+curl -X GET http://localhost:3000/especialidades/1/medicos
+```
+
+```js JavaScript
+const res = await fetch('http://localhost:3000/especialidades/1/medicos');
+const doctors = await res.json();
+```
+</CodeGroup>
+
+**Example response:**
+
+```json
+[
+  {
+    "id": 10,
+    "nombre": "María",
+    "primer_apellido": "González",
+    "email": "mgonzalez@melika.health",
+    "especialidad": "Cardiología",
+    "numero_registro": "MED-00421",
+    "tarifa": "80.00",
+    "calificacion": "4.8",
+    "acepta_teleconsulta": true,
+    "acepta_presencial": true,
+    "biografia": "Cardióloga con 12 años de experiencia en cardiopatías congénitas.",
+    "anos_experiencia": 12,
+    "foto_url": "https://storage.example.com/doctors/mgonzalez.jpg"
+  }
+]
+```
+
+---
+
+### GET /especialidades/disponibilidad
+
+Returns the available time slots (`franjas`) for a specific doctor on a given calendar day. Use this endpoint to populate a daily time-slot picker in the booking flow.
+
+**Authentication:** None (public)
+
+<ParamField query="medico_id" type="integer" required>
+  The ID of the physician whose availability to query.
+</ParamField>
+<ParamField query="fecha" type="string" required>
+  The target date in `YYYY-MM-DD` format.
+</ParamField>
+
+<ResponseField name="[].id" type="integer">
+  Time slot (franja) identifier.
+</ResponseField>
+<ResponseField name="[].hora_inicio" type="string">
+  Slot start time (e.g. `"09:00:00"`).
+</ResponseField>
+<ResponseField name="[].hora_fin" type="string">
+  Slot end time (e.g. `"09:30:00"`).
+</ResponseField>
+<ResponseField name="[].disponible" type="boolean">
+  Whether this slot is still open for booking (`true`) or already taken (`false`).
+</ResponseField>
+
+<CodeGroup>
+```bash cURL
+curl -X GET "http://localhost:3000/especialidades/disponibilidad?medico_id=10&fecha=2025-02-14"
+```
+
+```js JavaScript
+const params = new URLSearchParams({ medico_id: 10, fecha: '2025-02-14' });
+const res = await fetch(`http://localhost:3000/especialidades/disponibilidad?${params}`);
+const slots = await res.json();
+```
+</CodeGroup>
+
+**Example response:**
+
+```json
+[
+  { "id": 201, "hora_inicio": "09:00:00", "hora_fin": "09:30:00", "disponible": true },
+  { "id": 202, "hora_inicio": "09:30:00", "hora_fin": "10:00:00", "disponible": false },
+  { "id": 203, "hora_inicio": "10:00:00", "hora_fin": "10:30:00", "disponible": true }
+]
+```
+
+---
+
+### GET /especialidades/disponibilidad-rango
+
+Returns all available time slots for a doctor within a date range, formatted as **FullCalendar event objects**. This endpoint is designed for direct consumption by FullCalendar's `events` feed — each object includes `start`, `end`, `title`, `backgroundColor`, and `borderColor` properties alongside MELIKA-specific metadata in `extendedProps`.
+
+**Authentication:** None (public)
+
+<ParamField query="medico_id" type="integer" required>
+  The ID of the physician whose availability to query.
+</ParamField>
+<ParamField query="inicio" type="string" required>
+  Range start date in `YYYY-MM-DD` format (inclusive).
+</ParamField>
+<ParamField query="fin" type="string" required>
+  Range end date in `YYYY-MM-DD` format (inclusive).
+</ParamField>
+
+<ResponseField name="[].id" type="string">
+  Event identifier (stringified slot ID).
+</ResponseField>
+<ResponseField name="[].title" type="string">
+  Human-readable label displayed on the calendar (e.g. `"Disponible"`).
+</ResponseField>
+<ResponseField name="[].start" type="string">
+  ISO 8601 datetime string for the event start.
+</ResponseField>
+<ResponseField name="[].end" type="string">
+  ISO 8601 datetime string for the event end.
+</ResponseField>
+<ResponseField name="[].backgroundColor" type="string">
+  Hex color for the FullCalendar event background.
+</ResponseField>
+<ResponseField name="[].borderColor" type="string">
+  Hex color for the FullCalendar event border.
+</ResponseField>
+<ResponseField name="[].extendedProps" type="object">
+  <Expandable title="extendedProps fields">
+    <ResponseField name="extendedProps.id_franja" type="integer">
+      The underlying time-slot ID used for booking.
+    </ResponseField>
+    <ResponseField name="extendedProps.hora_inicio" type="string">
+      Raw start time string.
+    </ResponseField>
+    <ResponseField name="extendedProps.hora_fin" type="string">
+      Raw end time string.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<Tip>
+  Feed this endpoint's response directly to FullCalendar's `events` option when using a custom fetch. The `extendedProps.id_franja` value is what you pass to the appointment booking endpoint when a user selects a slot.
+</Tip>
+
+<CodeGroup>
+```bash cURL
+curl -X GET "http://localhost:3000/especialidades/disponibilidad-rango?medico_id=10&inicio=2025-02-10&fin=2025-02-16"
+```
+
+```js JavaScript
+const params = new URLSearchParams({
+  medico_id: 10,
+  inicio: '2025-02-10',
+  fin: '2025-02-16'
+});
+const res = await fetch(`http://localhost:3000/especialidades/disponibilidad-rango?${params}`);
+const events = await res.json();
+```
+
+```js FullCalendar Integration
+import FullCalendar from '@fullcalendar/react';
+import timeGridPlugin from '@fullcalendar/timegrid';
+
+function DoctorCalendar({ medicoId }) {
+  return (
+    <FullCalendar
+      plugins={[timeGridPlugin]}
+      initialView="timeGridWeek"
+      events={async (fetchInfo) => {
+        const params = new URLSearchParams({
+          medico_id: medicoId,
+          inicio: fetchInfo.startStr.slice(0, 10),
+          fin: fetchInfo.endStr.slice(0, 10)
+        });
+        const res = await fetch(
+          `http://localhost:3000/especialidades/disponibilidad-rango?${params}`
+        );
+        return res.json();
+      }}
+      eventClick={(info) => {
+        const { id_franja } = info.event.extendedProps;
+        // → use id_franja to book the appointment
+      }}
+    />
+  );
+}
+```
+</CodeGroup>
+
+**Example response:**
+
+```json
+[
+  {
+    "id": "201",
+    "title": "Disponible",
+    "start": "2025-02-10T09:00:00",
+    "end": "2025-02-10T09:30:00",
+    "backgroundColor": "#22c55e",
+    "borderColor": "#16a34a",
+    "extendedProps": {
+      "id_franja": 201,
+      "hora_inicio": "09:00:00",
+      "hora_fin": "09:30:00"
+    }
+  },
+  {
+    "id": "203",
+    "title": "Disponible",
+    "start": "2025-02-10T10:00:00",
+    "end": "2025-02-10T10:30:00",
+    "backgroundColor": "#22c55e",
+    "borderColor": "#16a34a",
+    "extendedProps": {
+      "id_franja": 203,
+      "hora_inicio": "10:00:00",
+      "hora_fin": "10:30:00"
+    }
+  }
+]
+```
+
+---
+
+### POST /especialidades
+
+Creates a new medical specialty entry. This operation is reserved for platform administrators and is exposed through the admin route layer.
+
+**Authentication:** None at route level (enforced at the admin layer)
+
+<ParamField body="nombre" type="string" required>
+  Unique specialty name. Returns an error if a specialty with this name already exists.
+</ParamField>
+<ParamField body="descripcion" type="string">
+  Description of the discipline.
+</ParamField>
+<ParamField body="precio_base" type="number">
+  Base consultation price for this specialty.
+</ParamField>
+<ParamField body="imagen_url" type="string">
+  URL to the specialty's cover image.
+</ParamField>
+<ParamField body="activa" type="boolean">
+  Whether the specialty is immediately visible to patients. Defaults to `true`.
+</ParamField>
+
+<CodeGroup>
+```bash cURL
+curl -X POST http://localhost:3000/especialidades \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nombre": "Dermatología",
+    "descripcion": "Diagnóstico y tratamiento de enfermedades de la piel.",
+    "precio_base": 65.00,
+    "imagen_url": "https://storage.example.com/specialties/dermatologia.jpg",
+    "activa": true
+  }'
+```
+</CodeGroup>
+
+---
+
+### PUT /especialidades/:id
+
+Fully updates an existing specialty record. All fields may be modified, including toggling `activa` to hide a specialty from public listings without deleting it.
+
+**Authentication:** None at route level (enforced at the admin layer)
+
+<ParamField path="id" type="integer" required>
+  The ID of the specialty to update.
+</ParamField>
+<ParamField body="nombre" type="string">
+  Updated specialty name. Must remain unique across all specialties.
+</ParamField>
+<ParamField body="descripcion" type="string">
+  Updated discipline description.
+</ParamField>
+<ParamField body="precio_base" type="number">
+  Updated base consultation price.
+</ParamField>
+<ParamField body="imagen_url" type="string">
+  Updated cover image URL.
+</ParamField>
+<ParamField body="activa" type="boolean">
+  Set to `false` to deactivate and hide this specialty from public listings.
+</ParamField>
+
+<CodeGroup>
+```bash cURL
+curl -X PUT http://localhost:3000/especialidades/3 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "precio_base": 70.00,
+    "activa": false
+  }'
+```
+</CodeGroup>

@@ -1,0 +1,651 @@
+---
+title: "Clinical Records API — Medical Histories and Documents"
+sidebarTitle: "Clinical Records"
+description: "MELIKA's clinical records endpoints manage structured per-appointment medical histories, clarification notes, and external clinical documents with role-based access control."
+---
+
+Clinical records (historias clínicas) are the structured medical histories that MELIKA generates per appointment. Each record is tightly coupled to a single appointment (`id_cita` is UNIQUE), ensuring a one-to-one relationship between a consultation and its clinical narrative. Only authenticated physicians (`isMedico`) may create or modify records, while patients may read their own histories and manage the visibility of external documents. All endpoints require a valid JWT (`verifyToken`).
+
+---
+
+## Data Model
+
+The `historias_clinicas` table captures the full clinical encounter from chief complaint through treatment plan, with prescribed medications stored as a structured JSONB array.
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | integer | Primary key |
+| `id_paciente` | integer | FK → patients |
+| `id_medico` | integer | FK → doctors |
+| `id_cita` | integer | FK → appointments — **UNIQUE** (one record per appointment) |
+| `motivo_consulta` | TEXT | **Required.** Chief complaint |
+| `anamnesis` | TEXT | Medical history narrative |
+| `examen_fisico` | TEXT | Physical examination findings |
+| `diagnostico_cie10` | VARCHAR(10) | ICD-10 diagnosis code |
+| `descripcion_diagnostico` | TEXT | Human-readable diagnosis description |
+| `plan_tratamiento` | TEXT | Treatment plan |
+| `medicamentos_recetados` | JSONB | Array of prescribed medications (see below) |
+| `observaciones` | TEXT | Additional observations |
+| `created_at` | timestamp | Auto-generated |
+| `updated_at` | timestamp | Auto-updated |
+
+### `medicamentos_recetados` Structure
+
+The `medicamentos_recetados` field stores a JSONB array where each element represents one prescribed drug. Each object links back to the medications catalog and includes dosage instructions.
+
+```json
+[
+  {
+    "id": 1,
+    "nombre_comercial": "Ibuprofeno",
+    "principio_activo": "ibuprofeno",
+    "dosis": "400mg",
+    "frecuencia": "cada 8 horas",
+    "duracion": "5 dias"
+  }
+]
+```
+
+<Note>
+  Because `medicamentos_recetados` is stored as JSONB, you may include as many medication objects as needed in the array. Each entry should reference a valid medication `id` from the `/medicamentos` catalog.
+</Note>
+
+---
+
+## Endpoints
+
+### GET /historias/paciente/:id\_paciente
+
+Retrieves all clinical records belonging to a specific patient. Each record in the response is enriched with the creating physician's full name and specialty. Patients may only request their own records; physicians may access records for patients under their care.
+
+**Authentication:** `verifyToken`
+
+<ParamField path="id_paciente" type="integer" required>
+  The unique identifier of the patient whose clinical records are being requested.
+</ParamField>
+
+<ResponseField name="[].id" type="integer">
+  Clinical record identifier.
+</ResponseField>
+<ResponseField name="[].id_paciente" type="integer">
+  Patient identifier.
+</ResponseField>
+<ResponseField name="[].id_cita" type="integer">
+  Appointment identifier this record belongs to.
+</ResponseField>
+<ResponseField name="[].motivo_consulta" type="string">
+  Chief complaint recorded during the consultation.
+</ResponseField>
+<ResponseField name="[].diagnostico_cie10" type="string">
+  ICD-10 code assigned by the physician.
+</ResponseField>
+<ResponseField name="[].medicamentos_recetados" type="array">
+  JSONB array of prescribed medications.
+</ResponseField>
+<ResponseField name="[].medico_nombre" type="string">
+  Full name of the physician who created the record.
+</ResponseField>
+<ResponseField name="[].especialidad" type="string">
+  Medical specialty of the attending physician.
+</ResponseField>
+
+<CodeGroup>
+```bash cURL
+curl -X GET http://localhost:3000/historias/paciente/42 \
+  -H "Authorization: Bearer <token>"
+```
+
+```js JavaScript
+const res = await fetch('http://localhost:3000/historias/paciente/42', {
+  headers: { Authorization: 'Bearer <token>' }
+});
+const records = await res.json();
+```
+</CodeGroup>
+
+---
+
+### GET /historias/cita/:id\_cita
+
+Returns the clinical record associated with a specific appointment. Useful for post-consultation review directly from the appointment context.
+
+**Authentication:** `verifyToken`
+
+<ParamField path="id_cita" type="integer" required>
+  The appointment ID for which to retrieve the clinical record.
+</ParamField>
+
+<ResponseField name="id" type="integer">
+  Clinical record identifier.
+</ResponseField>
+<ResponseField name="id_paciente" type="integer">
+  Patient identifier.
+</ResponseField>
+<ResponseField name="id_medico" type="integer">
+  Physician identifier.
+</ResponseField>
+<ResponseField name="motivo_consulta" type="string">
+  Chief complaint.
+</ResponseField>
+<ResponseField name="anamnesis" type="string">
+  Medical history narrative.
+</ResponseField>
+<ResponseField name="examen_fisico" type="string">
+  Physical examination findings.
+</ResponseField>
+<ResponseField name="diagnostico_cie10" type="string">
+  ICD-10 diagnosis code.
+</ResponseField>
+<ResponseField name="plan_tratamiento" type="string">
+  Prescribed treatment plan.
+</ResponseField>
+<ResponseField name="medicamentos_recetados" type="array">
+  JSONB array of prescribed medications.
+</ResponseField>
+
+<CodeGroup>
+```bash cURL
+curl -X GET http://localhost:3000/historias/cita/88 \
+  -H "Authorization: Bearer <token>"
+```
+
+```js JavaScript
+const res = await fetch('http://localhost:3000/historias/cita/88', {
+  headers: { Authorization: 'Bearer <token>' }
+});
+const record = await res.json();
+```
+</CodeGroup>
+
+---
+
+### GET /historias/:id/completa
+
+Retrieves a single clinical record by its own ID with full detail — including all JSONB fields expanded and any clarification notes appended.
+
+**Authentication:** `verifyToken`
+
+<ParamField path="id" type="integer" required>
+  The clinical record's own primary key.
+</ParamField>
+
+<ResponseField name="id" type="integer">
+  Clinical record identifier.
+</ResponseField>
+<ResponseField name="motivo_consulta" type="string">
+  Chief complaint.
+</ResponseField>
+<ResponseField name="anamnesis" type="string">
+  Medical history narrative.
+</ResponseField>
+<ResponseField name="examen_fisico" type="string">
+  Physical examination findings.
+</ResponseField>
+<ResponseField name="diagnostico_cie10" type="string">
+  ICD-10 code.
+</ResponseField>
+<ResponseField name="descripcion_diagnostico" type="string">
+  Diagnosis description.
+</ResponseField>
+<ResponseField name="plan_tratamiento" type="string">
+  Treatment plan.
+</ResponseField>
+<ResponseField name="medicamentos_recetados" type="array">
+  Full JSONB array of prescribed medications.
+</ResponseField>
+<ResponseField name="observaciones" type="string">
+  Additional physician observations.
+</ResponseField>
+<ResponseField name="created_at" type="string">
+  ISO 8601 creation timestamp.
+</ResponseField>
+<ResponseField name="updated_at" type="string">
+  ISO 8601 last-updated timestamp.
+</ResponseField>
+
+<CodeGroup>
+```bash cURL
+curl -X GET http://localhost:3000/historias/15/completa \
+  -H "Authorization: Bearer <token>"
+```
+
+```js JavaScript
+const res = await fetch('http://localhost:3000/historias/15/completa', {
+  headers: { Authorization: 'Bearer <token>' }
+});
+const full = await res.json();
+```
+</CodeGroup>
+
+---
+
+### POST /historias
+
+Creates a new clinical record for a completed appointment. The record is permanently linked to the appointment via `id_cita`. Because `id_cita` carries a UNIQUE constraint, submitting a second record for the same appointment returns **409 Conflict**.
+
+**Authentication:** `verifyToken` + `isMedico`
+
+<ParamField body="id_cita" type="integer" required>
+  The appointment this record belongs to. Must not already have an associated record.
+</ParamField>
+<ParamField body="motivo_consulta" type="string" required>
+  Chief complaint — the patient's primary reason for the consultation.
+</ParamField>
+<ParamField body="anamnesis" type="string">
+  Medical history narrative gathered during the consultation.
+</ParamField>
+<ParamField body="examen_fisico" type="string">
+  Findings from the physical examination.
+</ParamField>
+<ParamField body="diagnostico_cie10" type="string">
+  ICD-10 diagnosis code (max 10 characters).
+</ParamField>
+<ParamField body="descripcion_diagnostico" type="string">
+  Plain-language description of the diagnosis.
+</ParamField>
+<ParamField body="plan_tratamiento" type="string">
+  Recommended treatment plan.
+</ParamField>
+<ParamField body="medicamentos_recetados" type="array">
+  JSONB array of prescribed medication objects. Each item should include `id`, `nombre_comercial`, `principio_activo`, `dosis`, `frecuencia`, and `duracion`.
+</ParamField>
+<ParamField body="observaciones" type="string">
+  Any additional observations or follow-up notes.
+</ParamField>
+
+<ResponseField name="mensaje" type="string">
+  Confirmation message, e.g. `"Historia clínica creada exitosamente."`.
+</ResponseField>
+<ResponseField name="historia" type="object">
+  The newly created clinical record object, including all persisted fields and auto-generated `id`, `created_at`, and `updated_at`.
+</ResponseField>
+
+<Expandable title="Error Responses">
+  | Status | Condition |
+  |---|---|
+  | `400` | `motivo_consulta` or `id_cita` missing from request body |
+  | `404` | No appointment found for the given `id_cita` |
+  | `409` | A clinical record already exists for this appointment |
+</Expandable>
+
+<Warning>
+  Each appointment can have exactly one clinical record. Attempting to create a second record for the same `id_cita` will return **409 Conflict**. Use `PUT /historias/:id` to update an existing record.
+</Warning>
+
+<CodeGroup>
+```bash cURL
+curl -X POST http://localhost:3000/historias \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id_cita": 88,
+    "motivo_consulta": "Dolor abdominal recurrente",
+    "anamnesis": "Paciente refiere episodios de dolor en FID desde hace 3 días.",
+    "examen_fisico": "Abdomen blando, dolor a la palpación en FID, sin defensa muscular.",
+    "diagnostico_cie10": "K37",
+    "descripcion_diagnostico": "Apendicitis no especificada",
+    "plan_tratamiento": "Referencia a cirugía general. Ayuno. Hidratación IV.",
+    "medicamentos_recetados": [
+      {
+        "id": 5,
+        "nombre_comercial": "Ketorolaco",
+        "principio_activo": "ketorolaco",
+        "dosis": "30mg",
+        "frecuencia": "cada 6 horas",
+        "duracion": "2 dias"
+      }
+    ],
+    "observaciones": "Seguimiento en 24 horas."
+  }'
+```
+
+```js JavaScript
+const res = await fetch('http://localhost:3000/historias', {
+  method: 'POST',
+  headers: {
+    Authorization: 'Bearer <token>',
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    id_cita: 88,
+    motivo_consulta: 'Dolor abdominal recurrente',
+    diagnostico_cie10: 'K37',
+    descripcion_diagnostico: 'Apendicitis no especificada',
+    medicamentos_recetados: [
+      { id: 5, nombre_comercial: 'Ketorolaco', principio_activo: 'ketorolaco',
+        dosis: '30mg', frecuencia: 'cada 6 horas', duracion: '2 dias' }
+    ]
+  })
+});
+const { mensaje, historia } = await res.json();
+```
+</CodeGroup>
+
+---
+
+### POST /historias/:id/aclaracion
+
+Appends a clarification or precision note to an existing clinical record. This is intended for physicians who need to add context or correct information without performing a full record update. The note is stored as an addendum and the record's `updated_at` is refreshed.
+
+**Authentication:** `verifyToken` + `isMedico`
+
+<ParamField path="id" type="integer" required>
+  The ID of the clinical record to annotate.
+</ParamField>
+<ParamField body="nota_aclaracion" type="string" required>
+  The clarification or addendum text to append to the record.
+</ParamField>
+
+<ResponseField name="mensaje" type="string">
+  Confirmation message.
+</ResponseField>
+<ResponseField name="historia" type="object">
+  The updated clinical record object with the appended clarification note.
+</ResponseField>
+
+<CodeGroup>
+```bash cURL
+curl -X POST http://localhost:3000/historias/15/aclaracion \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nota_aclaracion": "Se aclara que el diagnóstico diferencial incluye colitis. Pendiente resultado de ultrasonido."
+  }'
+```
+
+```js JavaScript
+const res = await fetch('http://localhost:3000/historias/15/aclaracion', {
+  method: 'POST',
+  headers: {
+    Authorization: 'Bearer <token>',
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    nota_aclaracion: 'Se aclara que el diagnóstico diferencial incluye colitis.'
+  })
+});
+const { mensaje, historia } = await res.json();
+```
+</CodeGroup>
+
+---
+
+### PUT /historias/:id
+
+Performs a full update (evolution note update) on an existing clinical record. All updatable fields may be replaced in a single request. This is typically used when a physician continues the clinical encounter across multiple sessions under the same appointment.
+
+**Authentication:** `verifyToken` + `isMedico`
+
+<ParamField path="id" type="integer" required>
+  The ID of the clinical record to update.
+</ParamField>
+<ParamField body="motivo_consulta" type="string">
+  Updated chief complaint.
+</ParamField>
+<ParamField body="anamnesis" type="string">
+  Updated medical history narrative.
+</ParamField>
+<ParamField body="examen_fisico" type="string">
+  Updated physical examination findings.
+</ParamField>
+<ParamField body="diagnostico_cie10" type="string">
+  Updated ICD-10 code.
+</ParamField>
+<ParamField body="descripcion_diagnostico" type="string">
+  Updated diagnosis description.
+</ParamField>
+<ParamField body="plan_tratamiento" type="string">
+  Updated treatment plan.
+</ParamField>
+<ParamField body="medicamentos_recetados" type="array">
+  Updated JSONB array of prescribed medications. Replaces the previous array entirely.
+</ParamField>
+<ParamField body="observaciones" type="string">
+  Updated observations.
+</ParamField>
+
+<ResponseField name="mensaje" type="string">
+  Confirmation message.
+</ResponseField>
+<ResponseField name="historia" type="object">
+  The fully updated clinical record object.
+</ResponseField>
+
+<CodeGroup>
+```bash cURL
+curl -X PUT http://localhost:3000/historias/15 \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "plan_tratamiento": "Continuar manejo conservador. Control en 72 horas.",
+    "medicamentos_recetados": [
+      {
+        "id": 2,
+        "nombre_comercial": "Amoxicilina",
+        "principio_activo": "amoxicilina",
+        "dosis": "500mg",
+        "frecuencia": "cada 8 horas",
+        "duracion": "7 dias"
+      }
+    ]
+  }'
+```
+
+```js JavaScript
+const res = await fetch('http://localhost:3000/historias/15', {
+  method: 'PUT',
+  headers: {
+    Authorization: 'Bearer <token>',
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    plan_tratamiento: 'Continuar manejo conservador. Control en 72 horas.',
+    medicamentos_recetados: [
+      { id: 2, nombre_comercial: 'Amoxicilina', principio_activo: 'amoxicilina',
+        dosis: '500mg', frecuencia: 'cada 8 horas', duracion: '7 dias' }
+    ]
+  })
+});
+const { mensaje, historia } = await res.json();
+```
+</CodeGroup>
+
+---
+
+### PATCH /historias/gestionar-cita/:id
+
+Performs a partial management update on a clinical record that is tied to appointment lifecycle operations. Intended for physicians to update status-related fields on the clinical record as part of managing the associated appointment.
+
+**Authentication:** `verifyToken` + `isMedico`
+
+<ParamField path="id" type="integer" required>
+  The ID of the clinical record to patch.
+</ParamField>
+
+<CodeGroup>
+```bash cURL
+curl -X PATCH http://localhost:3000/historias/gestionar-cita/15 \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{ "estado": "cerrada" }'
+```
+</CodeGroup>
+
+---
+
+## Document Endpoints
+
+External clinical documents (lab results, imaging reports, referrals) are stored separately from structured records and linked to patients by `id_paciente`. Patients control their own document visibility via the hide endpoint.
+
+### GET /historias/documentos/paciente/:id\_paciente
+
+Retrieves the list of external clinical documents on file for a given patient. Hidden documents (`oculto=TRUE`) may be excluded from patient-facing views depending on the consuming client.
+
+**Authentication:** `verifyToken`
+
+<ParamField path="id_paciente" type="integer" required>
+  The patient whose documents to retrieve.
+</ParamField>
+
+<ResponseField name="[].id" type="integer">
+  Document identifier.
+</ResponseField>
+<ResponseField name="[].id_paciente" type="integer">
+  Owning patient's identifier.
+</ResponseField>
+<ResponseField name="[].tipo_documento" type="string">
+  Document type label (e.g. `"laboratorio"`, `"imagen"`, `"referencia"`).
+</ResponseField>
+<ResponseField name="[].descripcion" type="string">
+  Human-readable document description.
+</ResponseField>
+<ResponseField name="[].fecha_documento" type="string">
+  Date the document was issued (ISO 8601 date string).
+</ResponseField>
+<ResponseField name="[].archivo_url" type="string">
+  URL to the stored document file.
+</ResponseField>
+<ResponseField name="[].oculto" type="boolean">
+  Whether the patient has hidden this document from view.
+</ResponseField>
+
+<CodeGroup>
+```bash cURL
+curl -X GET http://localhost:3000/historias/documentos/paciente/42 \
+  -H "Authorization: Bearer <token>"
+```
+
+```js JavaScript
+const res = await fetch('http://localhost:3000/historias/documentos/paciente/42', {
+  headers: { Authorization: 'Bearer <token>' }
+});
+const docs = await res.json();
+```
+</CodeGroup>
+
+---
+
+### GET /historias/documentos/:id
+
+Retrieves a single external clinical document by its ID.
+
+**Authentication:** `verifyToken`
+
+<ParamField path="id" type="integer" required>
+  The document's unique identifier.
+</ParamField>
+
+<ResponseField name="id" type="integer">Document identifier.</ResponseField>
+<ResponseField name="id_paciente" type="integer">Owning patient's identifier.</ResponseField>
+<ResponseField name="tipo_documento" type="string">Document type label.</ResponseField>
+<ResponseField name="descripcion" type="string">Document description.</ResponseField>
+<ResponseField name="fecha_documento" type="string">Document issue date.</ResponseField>
+<ResponseField name="archivo_url" type="string">URL to the file.</ResponseField>
+<ResponseField name="oculto" type="boolean">Visibility flag.</ResponseField>
+
+<CodeGroup>
+```bash cURL
+curl -X GET http://localhost:3000/historias/documentos/7 \
+  -H "Authorization: Bearer <token>"
+```
+</CodeGroup>
+
+---
+
+### POST /historias/documentos
+
+Registers a new external clinical document for a patient. This endpoint is used to upload metadata and a file URL for documents generated outside the MELIKA platform (e.g. third-party lab results, prior imaging studies).
+
+**Authentication:** `verifyToken`
+
+<ParamField body="id_paciente" type="integer" required>
+  The patient this document belongs to.
+</ParamField>
+<ParamField body="tipo_documento" type="string" required>
+  Category label for the document (e.g. `"laboratorio"`, `"imagen"`, `"referencia"`).
+</ParamField>
+<ParamField body="descripcion" type="string">
+  A brief human-readable description of the document contents.
+</ParamField>
+<ParamField body="fecha_documento" type="string">
+  The date the document was issued, in ISO 8601 format (`YYYY-MM-DD`).
+</ParamField>
+<ParamField body="archivo_url" type="string" required>
+  Full URL pointing to the stored document file (e.g. a cloud storage URL).
+</ParamField>
+
+<ResponseField name="mensaje" type="string">
+  Confirmation message, e.g. `"Documento registrado correctamente."`.
+</ResponseField>
+<ResponseField name="documento" type="object">
+  The newly created document object including its auto-generated `id` and all persisted fields.
+</ResponseField>
+
+<CodeGroup>
+```bash cURL
+curl -X POST http://localhost:3000/historias/documentos \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id_paciente": 42,
+    "tipo_documento": "laboratorio",
+    "descripcion": "Hemograma completo — Laboratorio Nacional",
+    "fecha_documento": "2024-11-10",
+    "archivo_url": "https://storage.example.com/docs/hemo_42_nov24.pdf"
+  }'
+```
+
+```js JavaScript
+const res = await fetch('http://localhost:3000/historias/documentos', {
+  method: 'POST',
+  headers: {
+    Authorization: 'Bearer <token>',
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    id_paciente: 42,
+    tipo_documento: 'laboratorio',
+    descripcion: 'Hemograma completo — Laboratorio Nacional',
+    fecha_documento: '2024-11-10',
+    archivo_url: 'https://storage.example.com/docs/hemo_42_nov24.pdf'
+  })
+});
+const { mensaje, documento } = await res.json();
+```
+</CodeGroup>
+
+---
+
+### PATCH /historias/documentos/:id/ocultar
+
+Allows a patient to hide an external document from their own view. Once hidden (`oculto=TRUE`), the document remains in the database but is suppressed from patient-facing document lists. This action is reserved exclusively for patients.
+
+**Authentication:** `verifyToken` + `isPaciente`
+
+<ParamField path="id" type="integer" required>
+  The ID of the document to hide.
+</ParamField>
+
+<ResponseField name="mensaje" type="string">
+  Returns `"Documento ocultado correctamente."` on success.
+</ResponseField>
+
+<Info>
+  Hiding a document is a one-way patient action — it sets `oculto=TRUE` and does not expose an "unhide" operation through this route. Physicians and administrators may still access hidden documents through privileged views.
+</Info>
+
+<CodeGroup>
+```bash cURL
+curl -X PATCH http://localhost:3000/historias/documentos/7/ocultar \
+  -H "Authorization: Bearer <token>"
+```
+
+```js JavaScript
+const res = await fetch('http://localhost:3000/historias/documentos/7/ocultar', {
+  method: 'PATCH',
+  headers: { Authorization: 'Bearer <token>' }
+});
+const { mensaje } = await res.json();
+// → "Documento ocultado correctamente."
+```
+</CodeGroup>

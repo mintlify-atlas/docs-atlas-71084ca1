@@ -1,0 +1,293 @@
+---
+title: "Admin Role: Platform Management and Dashboard"
+sidebarTitle: "Admin"
+description: "The MELIKA admin role provides full platform oversight — statistics, user and doctor management, schedule configuration, and specialty and medication administration."
+---
+
+The administrator role is MELIKA's highest-privilege role. Every request to an admin route is validated by both the `verifyToken` and `isAdmin` middleware guards, meaning a valid JWT **and** a `rol: "admin"` claim are required. From the `/admin` panel, administrators oversee the entire platform: they monitor real-time statistics, manage user accounts and doctor profiles, configure availability schedules in bulk, and maintain the catalogues of specialties and medications.
+
+<Warning>
+  Admin JWT tokens grant unrestricted access to every management endpoint on the platform, including the ability to deactivate users and modify medical records catalogues. **Store admin tokens securely and never expose them in client-side code or public repositories.** A compromised admin token gives an attacker full platform access until it expires (8 hours) or the account is deactivated.
+</Warning>
+
+## Dashboard Statistics
+
+The admin dashboard home loads a summary snapshot of the entire platform from a single endpoint:
+
+```http
+GET /admin/stats
+Authorization: Bearer <admin-token>
+```
+
+**Response shape:**
+
+```json
+{
+  "totales": {
+    "pacientes": 1024,
+    "medicos": 38,
+    "citas": 5870,
+    "citasHoy": 43,
+    "especialidades": 12,
+    "medicamentos": 210
+  },
+  "citasPorEstado": [
+    { "estado": "pendiente", "total": 312 },
+    { "estado": "completada", "total": 4991 },
+    { "estado": "cancelada", "total": 489 },
+    { "estado": "no_asistio", "total": 78 }
+  ],
+  "ultimasCitas": [
+    { "id": 5870, "paciente": "Laura Gómez", "medico": "Dr. Pérez", "fecha": "2025-08-14", "estado": "completada" }
+  ],
+  "medicosMasSolicitados": [
+    { "id": 3, "nombre": "Dr. Pérez", "especialidad": "Cardiología", "total_citas": 340 }
+  ]
+}
+```
+
+| Key | Description |
+|---|---|
+| `totales` | Aggregate counts for all major entities |
+| `citasPorEstado` | Appointment breakdown by status |
+| `ultimasCitas` | Most recent appointments across the platform |
+| `medicosMasSolicitados` | Doctors ranked by total bookings |
+
+## User Management
+
+<Tabs>
+  <Tab title="List Users">
+    ```http
+    GET /admin/usuarios?rol=paciente&buscar=laura&activo=true
+    Authorization: Bearer <admin-token>
+    ```
+
+    All three query parameters are optional and combinable:
+
+    | Parameter | Type | Description |
+    |---|---|---|
+    | `rol` | `string` | Filter by `paciente`, `medico`, or `admin` |
+    | `buscar` | `string` | Full-text search on name and email |
+    | `activo` | `boolean` | `true` for active accounts, `false` for deactivated |
+  </Tab>
+  <Tab title="Toggle Account Status">
+    ```http
+    PATCH /admin/usuarios/:id/estado
+    Authorization: Bearer <admin-token>
+    ```
+
+    Toggles the `activo` flag on the target user account. A deactivated user cannot log in and their JWT is effectively unusable even before it expires.
+
+    <Warning>
+      MELIKA prevents administrators from deactivating other **admin** accounts through this endpoint. Any attempt to toggle an admin account's status returns a `403 Forbidden` error, protecting platform governance continuity.
+    </Warning>
+  </Tab>
+</Tabs>
+
+## Doctor Management
+
+<Tabs>
+  <Tab title="Create Doctor">
+    Creating a doctor simultaneously builds their `usuarios` record and sends an invitation email with an activation token:
+
+    ```http
+    POST /medicos
+    Authorization: Bearer <admin-token>
+    Content-Type: application/json
+    ```
+
+    ```json
+    {
+      "nombre": "Ana",
+      "primer_apellido": "Ramírez",
+      "email": "ana.ramirez@hospital.co",
+      "id_especialidad": 2,
+      "numero_registro": "RM-20483",
+      "tarifa": 120000,
+      "acepta_teleconsulta": true,
+      "acepta_presencial": true,
+      "biografia": "Cardiologist with 12 years of experience.",
+      "anos_experiencia": 12
+    }
+    ```
+
+    The doctor receives an email with a link to set their password and activate the account.
+  </Tab>
+  <Tab title="Update Doctor">
+    ```http
+    PUT /medicos/:id
+    Authorization: Bearer <admin-token>
+    Content-Type: application/json
+    ```
+
+    Accepts any subset of the doctor's profile fields. Useful for correcting registration numbers, updating fees, or changing the linked specialty.
+  </Tab>
+  <Tab title="Toggle Doctor Status">
+    ```http
+    PATCH /medicos/:id/estado
+    Authorization: Bearer <admin-token>
+    ```
+
+    Activates or deactivates a doctor account. Deactivated doctors do not appear in patient-facing specialty and booking flows.
+  </Tab>
+</Tabs>
+
+## Schedule Management
+
+Administrators can create availability slots individually or generate an entire day's schedule in one request.
+
+<Tabs>
+  <Tab title="Single Slot">
+    ```http
+    POST /admin/horarios
+    Authorization: Bearer <admin-token>
+    Content-Type: application/json
+    ```
+
+    ```json
+    {
+      "id_medico": 3,
+      "fecha": "2025-08-18",
+      "hora_inicio": "14:00",
+      "hora_fin": "14:40"
+    }
+    ```
+  </Tab>
+  <Tab title="Bulk Generation">
+    Generates all 40-minute slots across an entire working day, with an optional mid-day break:
+
+    ```http
+    POST /admin/horarios/masivo
+    Authorization: Bearer <admin-token>
+    Content-Type: application/json
+    ```
+
+    ```json
+    {
+      "id_medico": 3,
+      "fecha": "2025-08-18",
+      "hora_inicio": "07:00",
+      "hora_fin": "17:00",
+      "inicio_descanso": "12:00",
+      "fin_descanso": "13:00"
+    }
+    ```
+
+    MELIKA calculates consecutive 40-minute windows from `hora_inicio` to `hora_fin`, skipping any window that overlaps the `inicio_descanso`–`fin_descanso` range. The result for the example above is 13 bookable slots.
+
+    | Field | Required | Description |
+    |---|---|---|
+    | `id_medico` | ✅ | Target doctor |
+    | `fecha` | ✅ | Date for the generated slots |
+    | `hora_inicio` | ✅ | Start of working day |
+    | `hora_fin` | ✅ | End of working day |
+    | `inicio_descanso` | ❌ | Break start (skips overlapping slots) |
+    | `fin_descanso` | ❌ | Break end |
+  </Tab>
+  <Tab title="Edit / Delete Slot">
+    **Edit:**
+    ```http
+    PUT /admin/horarios/:id
+    Authorization: Bearer <admin-token>
+    ```
+
+    **Delete:**
+    ```http
+    DELETE /admin/horarios/:id
+    Authorization: Bearer <admin-token>
+    ```
+
+    Neither action is permitted on a slot that has an **active appointment**. Attempting either returns a `409 Conflict` error.
+  </Tab>
+  <Tab title="List Schedules">
+    ```http
+    GET /admin/horarios?inicio=2025-08-01&fin=2025-08-31&id_medico=3
+    Authorization: Bearer <admin-token>
+    ```
+
+    Returns all slots within the date range, optionally filtered to a specific doctor.
+  </Tab>
+</Tabs>
+
+## Appointment Oversight
+
+<Tabs>
+  <Tab title="List Appointments">
+    ```http
+    GET /admin/citas?estado=pendiente&fecha_desde=2025-08-01&fecha_hasta=2025-08-31&buscar=gomez
+    Authorization: Bearer <admin-token>
+    ```
+
+    | Parameter | Description |
+    |---|---|
+    | `estado` | Filter by `pendiente`, `completada`, `cancelada`, `no_asistio` |
+    | `fecha_desde` | Lower bound of appointment date range |
+    | `fecha_hasta` | Upper bound of appointment date range |
+    | `buscar` | Full-text search across patient and doctor names |
+  </Tab>
+  <Tab title="Change Appointment Status">
+    Administrators can override the status of any appointment, including supplying an administrative cancellation reason:
+
+    ```http
+    PATCH /admin/citas/:id/estado
+    Authorization: Bearer <admin-token>
+    Content-Type: application/json
+    ```
+
+    ```json
+    {
+      "estado": "cancelada",
+      "razon_cancelacion": "Doctor unavailable due to medical emergency"
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Specialty Management
+
+```http
+POST   /admin/especialidades          # Create a new specialty
+PUT    /admin/especialidades/:id      # Update name / description / icon
+PATCH  /admin/especialidades/:id/estado  # Toggle active/inactive
+```
+
+Inactive specialties are hidden from the public browse page and cannot be selected when booking a new appointment.
+
+## Medication Management
+
+```http
+POST   /admin/medicamentos           # Add a medication to the catalogue
+PUT    /admin/medicamentos/:id       # Update medication details
+PATCH  /admin/medicamentos/:id/estado  # Toggle active/inactive
+```
+
+The medication catalogue is used by doctors when composing treatment fields in clinical histories.
+
+## Admin Panel Navigation
+
+The admin panel is served at `/admin` with nested routes for each management section:
+
+<Accordion title="Admin panel routes">
+  | Path | Section |
+  |---|---|
+  | `/admin` | Dashboard (stats overview) |
+  | `/admin/medicos` | Doctor management |
+  | `/admin/horarios` | Schedule management |
+  | `/admin/usuarios` | User management |
+  | `/admin/citas` | Appointment oversight |
+  | `/admin/especialidades` | Specialty catalogue |
+  | `/admin/medicamentos` | Medication catalogue |
+
+  All nested routes are protected by the `RutaAdmin` guard in `App.jsx`. Any authenticated user without `rol: "admin"` is redirected to their own dashboard.
+</Accordion>
+
+## API Reference
+
+<CardGroup cols={2}>
+  <Card title="Admin API Reference" icon="shield-halved" href="/api/admin">
+    Full endpoint reference for all `/admin/*` routes — request schemas, response shapes, and error codes.
+  </Card>
+  <Card title="Doctors API Reference" icon="user-doctor" href="/api/doctors">
+    Endpoint reference for doctor creation, profile management, and invitation flow endpoints.
+  </Card>
+</CardGroup>

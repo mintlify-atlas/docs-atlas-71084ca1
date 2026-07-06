@@ -1,0 +1,185 @@
+---
+title: "Authorization Middleware and Role Guards in MELIKA"
+sidebarTitle: "Auth Middleware"
+description: "MELIKA enforces access control through JWT verification and four role guards — verifyToken, isAdmin, isMedico, and isPaciente — applied per route or router-level."
+---
+
+MELIKA's access-control layer is composed of four Express middleware functions defined in `authMiddleware.js`. `verifyToken` validates the JWT on every protected request; the three role guards (`isAdmin`, `isMedico`, `isPaciente`) are applied on top of it to restrict individual routes or entire routers to a single role. All middleware functions attach data to `req.usuario` so subsequent handlers can read the authenticated user's identity without touching the database again.
+
+<Note>
+  The JWT payload shape is `{ id, nombre, rol }`. The `rol` field will be one of `"paciente"`, `"medico"`, or `"admin"`. Every middleware below reads from this decoded payload, so the token must be valid before any role guard runs.
+</Note>
+
+---
+
+## verifyToken
+
+`verifyToken` reads the `Authorization` request header, extracts the Bearer token, and verifies it against `JWT_SECRET`. On success it populates `req.usuario` with the decoded payload and calls `next()`. On failure it ends the request immediately with a `401`.
+
+### How it works
+
+<Steps>
+  <Step title="Read the header">
+    The middleware reads `req.headers.authorization`. If the header is absent or falsy, it returns `401` immediately.
+  </Step>
+  <Step title="Extract the token">
+    The header value is split on a space (`' '`) and the second element is taken as the Bearer token.
+  </Step>
+  <Step title="Verify with JWT_SECRET">
+    `jwt.verify(token, process.env.JWT_SECRET)` is called. If verification succeeds, the decoded object is stored on `req.usuario`.
+  </Step>
+  <Step title="Continue or reject">
+    A valid token calls `next()`. An invalid or expired token returns `401 'Token inválido o expirado.'`.
+  </Step>
+</Steps>
+
+### Error responses
+
+| Status | Message | Trigger |
+|--------|---------|---------|
+| `401` | `"Acceso denegado. Token requerido."` | `Authorization` header is missing |
+| `401` | `"Token inválido o expirado."` | Token signature is wrong or TTL has elapsed |
+
+---
+
+## Role guards
+
+Role guards are thin middleware functions that inspect `req.usuario.rol` (set by `verifyToken`) and either call `next()` or return a `403`. They must always be chained **after** `verifyToken`.
+
+### Guard reference
+
+| Middleware | Required role | 403 message |
+|------------|---------------|-------------|
+| `isAdmin` | `"admin"` | `"Acceso restringido a administradores."` |
+| `isMedico` | `"medico"` | `"Acceso restringido a médicos."` |
+| `isPaciente` | `"paciente"` | `"Acceso restringido a pacientes."` |
+
+---
+
+## Calling a protected endpoint
+
+Pass the JWT returned by `POST /auth/login` in the `Authorization` header of every subsequent request.
+
+```bash
+curl -H "Authorization: Bearer <token>" \
+  https://your-api.railway.app/citas/mis-citas
+```
+
+Replace `<token>` with the string value of the `token` field from the login response.
+
+---
+
+## Applying guards: route-level vs. router-level
+
+Guards can be attached at two granularities depending on how broadly the restriction should apply.
+
+### Router-level (applies to all routes in a file)
+
+Place `verifyToken` and the appropriate role guard as the first arguments to `router.use()` at the top of the router file. Every route registered below it will require that role.
+
+```js
+// adminRoutes.js
+import { verifyToken, isAdmin } from '../middlewares/authMiddleware.js';
+
+router.use(verifyToken, isAdmin); // all routes below require admin
+
+router.get('/usuarios', getAllUsers);
+router.delete('/usuarios/:id', deleteUser);
+```
+
+### Route-level (applies to a single endpoint)
+
+Pass the guards directly in the route definition when only certain endpoints within a router need protection.
+
+```js
+// citasRoutes.js
+import { verifyToken, isMedico, isPaciente } from '../middlewares/authMiddleware.js';
+
+router.get('/mis-citas',      verifyToken, isPaciente, getMisCitas);
+router.put('/:id/confirmar',  verifyToken, isMedico,   confirmarCita);
+```
+
+---
+
+## Response scenarios
+
+<Tabs>
+  <Tab title="Missing token">
+    Requesting a protected route without an `Authorization` header:
+
+    ```bash
+    curl https://your-api.railway.app/citas/mis-citas
+    ```
+
+    ```json
+    {
+      "mensaje": "Acceso denegado. Token requerido."
+    }
+    ```
+
+    **HTTP 401**
+  </Tab>
+  <Tab title="Expired or invalid token">
+    Sending a malformed token or one whose 8-hour TTL has elapsed:
+
+    ```bash
+    curl -H "Authorization: Bearer eyInvalidToken..." \
+      https://your-api.railway.app/citas/mis-citas
+    ```
+
+    ```json
+    {
+      "mensaje": "Token inválido o expirado."
+    }
+    ```
+
+    **HTTP 401** — obtain a fresh token via `POST /auth/login`.
+  </Tab>
+  <Tab title="Wrong role">
+    A `paciente` token hitting an endpoint guarded by `isAdmin`:
+
+    ```bash
+    curl -H "Authorization: Bearer <paciente-token>" \
+      https://your-api.railway.app/admin/usuarios
+    ```
+
+    ```json
+    {
+      "mensaje": "Acceso restringido a administradores."
+    }
+    ```
+
+    **HTTP 403** — the token is valid but the role is insufficient.
+  </Tab>
+  <Tab title="Success">
+    A valid `paciente` token on a route guarded by `verifyToken` + `isPaciente`:
+
+    ```bash
+    curl -H "Authorization: Bearer <paciente-token>" \
+      https://your-api.railway.app/citas/mis-citas
+    ```
+
+    The request proceeds to the route handler and returns the expected resource.
+
+    **HTTP 200**
+  </Tab>
+</Tabs>
+
+---
+
+## Quick-reference card
+
+<CardGroup cols={2}>
+  <Card title="verifyToken" icon="key">
+    Reads `Authorization: Bearer <token>`, verifies with `JWT_SECRET`, and populates `req.usuario`. Required on every protected route.
+  </Card>
+  <Card title="isAdmin" icon="shield-halved">
+    Asserts `req.usuario.rol === 'admin'`. Returns `403` for any other role.
+  </Card>
+  <Card title="isMedico" icon="user-doctor">
+    Asserts `req.usuario.rol === 'medico'`. Returns `403` for any other role.
+  </Card>
+  <Card title="isPaciente" icon="hospital-user">
+    Asserts `req.usuario.rol === 'paciente'`. Returns `403` for any other role.
+  </Card>
+</CardGroup>

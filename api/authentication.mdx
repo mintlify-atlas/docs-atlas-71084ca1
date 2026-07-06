@@ -1,0 +1,378 @@
+---
+title: "Authentication API — Registration, Login, and Password Recovery"
+sidebarTitle: "Authentication"
+description: "MELIKA's authentication endpoints handle user registration, email verification with 6-digit codes, JWT login, and a secure two-step password recovery flow."
+---
+
+MELIKA uses **JWT Bearer tokens** for authentication. All `/auth/*` endpoints are public — no token is required to register, log in, or recover a password. Once logged in, include the token in every request to a protected route via the `Authorization` header. Tokens carry a minimal payload (`id`, `nombre`, `rol`) and expire after **8 hours**.
+
+```http
+Authorization: Bearer <token>
+```
+
+The decoded JWT payload has the following shape:
+
+```json
+{
+  "id": 42,
+  "nombre": "María",
+  "rol": "paciente"
+}
+```
+
+---
+
+## POST /auth/register
+
+Registers a new user account. The account is created with `activo = FALSE` and `verificado = FALSE`. A **6-digit verification code** is emailed to the provided address and expires in 15 minutes. The user must verify their email before they can log in.
+
+**Authentication required:** No
+
+### Request body
+
+<ParamField body="nombre" type="string" required>
+  First name of the user.
+</ParamField>
+
+<ParamField body="primer_apellido" type="string" required>
+  First surname of the user.
+</ParamField>
+
+<ParamField body="email" type="string" required>
+  Unique email address. Used as the login identifier and for sending verification codes.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  Account password. Must satisfy the rules enforced by `validarRegistroUsuario()`.
+</ParamField>
+
+<ParamField body="tipo_documento" type="string" required>
+  Type of identity document. Accepted values: `CC`, `CE`, `PASAPORTE`.
+</ParamField>
+
+<ParamField body="numero_documento" type="string" required>
+  Unique document number. Returns `409` if already registered.
+</ParamField>
+
+<ParamField body="fecha_nacimiento" type="string" required>
+  Date of birth in `YYYY-MM-DD` format.
+</ParamField>
+
+<ParamField body="genero" type="string" required>
+  Gender of the user (e.g. `M`, `F`, or the value your front-end sends).
+</ParamField>
+
+### Responses
+
+<ResponseField name="mensaje" type="string">
+  Human-readable confirmation message.
+</ResponseField>
+
+<ResponseField name="email" type="string">
+  The email address to which the verification code was sent.
+</ResponseField>
+
+<ResponseField name="correoEnviado" type="boolean">
+  `true` if the verification email was dispatched successfully.
+</ResponseField>
+
+#### Error responses
+
+| Status | Condition | Body |
+|--------|-----------|------|
+| `422` | Validation failed | `{ mensaje, errores[] }` |
+| `409` | Email already registered | `{ mensaje }` |
+| `409` | Document number already registered | `{ mensaje }` |
+
+<Tip>
+  If the verification email doesn't arrive within a few minutes, call **POST /auth/reenviar-codigo** with `tipo: "registro"` to request a fresh code.
+</Tip>
+
+### Example
+
+```bash
+curl -X POST https://your-api.railway.app/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nombre": "María",
+    "primer_apellido": "García",
+    "email": "maria@example.com",
+    "password": "SuperSegura123",
+    "tipo_documento": "CC",
+    "numero_documento": "1234567890",
+    "fecha_nacimiento": "1995-06-15",
+    "genero": "F"
+  }'
+```
+
+```json
+{
+  "mensaje": "Usuario registrado. Por favor verifica tu correo electrónico.",
+  "email": "maria@example.com",
+  "correoEnviado": true
+}
+```
+
+---
+
+## POST /auth/login
+
+Authenticates a registered and verified user. Returns a signed **JWT** valid for 8 hours and a brief user object. Accounts that exist but have not completed email verification are rejected with a distinct flag so your front-end can prompt the user to verify.
+
+**Authentication required:** No
+
+### Request body
+
+<ParamField body="email" type="string" required>
+  The email address used during registration.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  The account password.
+</ParamField>
+
+### Responses
+
+<ResponseField name="token" type="string">
+  Signed JWT. Include this as `Authorization: Bearer <token>` on all protected requests. Expires in 8 h.
+</ResponseField>
+
+<ResponseField name="usuario" type="object">
+  <Expandable title="usuario fields">
+    <ResponseField name="id" type="number">
+      Internal numeric user ID.
+    </ResponseField>
+    <ResponseField name="nombre" type="string">
+      User's first name.
+    </ResponseField>
+    <ResponseField name="primer_apellido" type="string">
+      User's first surname.
+    </ResponseField>
+    <ResponseField name="email" type="string">
+      User's email address.
+    </ResponseField>
+    <ResponseField name="rol" type="string">
+      Role assigned to the account: `paciente`, `medico`, or `admin`.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+#### Error responses
+
+| Status | Condition | Body |
+|--------|-----------|------|
+| `401` | Wrong email or password | `{ mensaje }` |
+| `403` | Email not yet verified | `{ mensaje, sinVerificar: true, email }` |
+| `403` | Account is inactive | `{ mensaje }` |
+
+### Example
+
+```bash
+curl -X POST https://your-api.railway.app/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "maria@example.com",
+    "password": "SuperSegura123"
+  }'
+```
+
+```json
+{
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "usuario": {
+    "id": 42,
+    "nombre": "María",
+    "primer_apellido": "García",
+    "email": "maria@example.com",
+    "rol": "paciente"
+  }
+}
+```
+
+---
+
+## GET /auth/verify-code
+
+Verifies the 6-digit code sent during registration. On success the account is activated (`activo = TRUE`, `verificado = TRUE`) and the user may log in immediately.
+
+**Authentication required:** No
+
+### Query parameters
+
+<ParamField query="email" type="string" required>
+  The email address associated with the account being verified.
+</ParamField>
+
+<ParamField query="codigo" type="string" required>
+  The 6-digit verification code received by email.
+</ParamField>
+
+### Responses
+
+<ResponseField name="mensaje" type="string">
+  `"Cuenta verificada correctamente. Ya puedes iniciar sesión."` on success.
+</ResponseField>
+
+#### Error responses
+
+| Status | Condition | Body |
+|--------|-----------|------|
+| `400` | Code is wrong or not found | `{ mensaje }` |
+| `400` | Code has expired | `{ mensaje, expirado: true }` |
+
+### Example
+
+```bash
+curl "https://your-api.railway.app/auth/verify-code?email=maria@example.com&codigo=483921"
+```
+
+```json
+{
+  "mensaje": "Cuenta verificada correctamente. Ya puedes iniciar sesión."
+}
+```
+
+---
+
+## POST /auth/reenviar-codigo
+
+Generates a new 6-digit code and sends it to the given email, replacing any existing code. Supports both the registration flow (`tipo: "registro"`) and the password-recovery flow (`tipo: "recuperacion"`).
+
+**Authentication required:** No
+
+### Request body
+
+<ParamField body="email" type="string" required>
+  The email address to which the new code should be sent.
+</ParamField>
+
+<ParamField body="tipo" type="string" required>
+  Purpose of the code. Must be `"registro"` or `"recuperacion"`.
+</ParamField>
+
+### Responses
+
+<ResponseField name="mensaje" type="string">
+  Confirmation that a new code has been sent.
+</ResponseField>
+
+<ResponseField name="correoEnviado" type="boolean">
+  `true` if the email was dispatched successfully.
+</ResponseField>
+
+#### Error responses
+
+| Status | Condition | Body |
+|--------|-----------|------|
+| `404` | Email not found | `{ mensaje }` |
+| `400` | Account is already verified | `{ mensaje }` |
+
+### Example
+
+```bash
+curl -X POST https://your-api.railway.app/auth/reenviar-codigo \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "maria@example.com",
+    "tipo": "registro"
+  }'
+```
+
+```json
+{
+  "mensaje": "Código reenviado correctamente.",
+  "correoEnviado": true
+}
+```
+
+---
+
+## POST /auth/recuperar-password
+
+Initiates a password-recovery flow. If the supplied email belongs to a registered account, a 6-digit recovery code is sent. The response is intentionally identical whether the email exists or not, preventing account enumeration.
+
+**Authentication required:** No
+
+<Note>
+  This endpoint **always** returns the same success message regardless of whether the email is in the database. This is a deliberate security measure to prevent attackers from discovering which addresses are registered (account-enumeration protection). Your front-end should display the message as-is without inferring account existence.
+</Note>
+
+### Request body
+
+<ParamField body="email" type="string" required>
+  The email address for which the recovery code should be sent.
+</ParamField>
+
+### Responses
+
+<ResponseField name="mensaje" type="string">
+  Always `"Si el correo está registrado, recibirás un código en breve."`.
+</ResponseField>
+
+### Example
+
+```bash
+curl -X POST https://your-api.railway.app/auth/recuperar-password \
+  -H "Content-Type: application/json" \
+  -d '{ "email": "maria@example.com" }'
+```
+
+```json
+{
+  "mensaje": "Si el correo está registrado, recibirás un código en breve."
+}
+```
+
+---
+
+## POST /auth/nueva-password
+
+Completes the password-recovery flow. Validates the 6-digit code from the recovery email and updates the account password. The code must not be expired.
+
+**Authentication required:** No
+
+### Request body
+
+<ParamField body="email" type="string" required>
+  The email address of the account being recovered.
+</ParamField>
+
+<ParamField body="codigo" type="string" required>
+  The 6-digit code received via email after calling `/auth/recuperar-password`.
+</ParamField>
+
+<ParamField body="nueva_password" type="string" required>
+  The new password. Must be at least **6 characters** long.
+</ParamField>
+
+### Responses
+
+<ResponseField name="mensaje" type="string">
+  `"Contraseña actualizada correctamente. Ya puedes iniciar sesión."` on success.
+</ResponseField>
+
+#### Error responses
+
+| Status | Condition | Body |
+|--------|-----------|------|
+| `400` | Code is wrong | `{ mensaje }` |
+| `400` | Code has expired | `{ mensaje, expirado: true }` |
+| `400` | `nueva_password` shorter than 6 characters | `{ mensaje }` |
+
+### Example
+
+```bash
+curl -X POST https://your-api.railway.app/auth/nueva-password \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "maria@example.com",
+    "codigo": "748201",
+    "nueva_password": "NuevaSegura456"
+  }'
+```
+
+```json
+{
+  "mensaje": "Contraseña actualizada correctamente. Ya puedes iniciar sesión."
+}
+```

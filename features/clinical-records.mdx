@@ -1,0 +1,179 @@
+---
+title: "Clinical Records: Structured Medical Histories in MELIKA"
+sidebarTitle: "Clinical Records"
+description: "MELIKA stores structured clinical histories per appointment, including CIE-10 diagnoses, treatment plans, JSONB prescription data, clarification notes, and PDF export."
+---
+
+MELIKA's clinical records system (`historias_clinicas`) gives doctors a structured workspace to document every consultation from chief complaint through diagnosis and treatment plan. Records are created after managing a completed appointment, can be supplemented with clarification notes at any time, and support both external document attachments and full PDF export — all with strict role-based access so only the treating doctor can author a record while the patient retains read-only visibility into their own health history.
+
+## What a Clinical Record Contains
+
+Each `historia_clinica` is linked one-to-one with a managed appointment. The record is composed of both free-text narrative fields and a structured JSONB array for prescribed medications.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `motivo_consulta` | `text` | ✅ Yes | Chief complaint — the patient's stated reason for the visit |
+| `anamnesis` | `text` | No | Clinical history and symptom narrative taken from the patient |
+| `examen_fisico` | `text` | No | Physical examination findings recorded by the doctor |
+| `diagnostico_cie10` | `varchar` | No | ICD-10 / CIE-10 diagnostic code (e.g., `I10` for hypertension) |
+| `descripcion_diagnostico` | `text` | No | Plain-language description of the diagnosis |
+| `plan_tratamiento` | `text` | No | Treatment plan, follow-up instructions, referrals |
+| `medicamentos_recetados` | `jsonb` | No | Structured array of prescribed medications (see below) |
+| `observaciones` | `text` | No | Additional notes or observations for the record |
+
+<Note>
+  Only `motivo_consulta` is mandatory when creating a clinical record. All other fields are optional and can be filled progressively as the consultation proceeds.
+</Note>
+
+## Doctor Workflow
+
+<Steps>
+  <Step title="Manage the Appointment">
+    Once a patient's appointment reaches its scheduled time, the treating doctor navigates to the appointment and selects **Gestionar**. This action transitions the `cita` to `completada` and opens the clinical record editor.
+  </Step>
+  <Step title="Create the Clinical Record">
+    The doctor fills in the `historia_clinica` fields. At minimum, `motivo_consulta` must be provided. Medications are added as a structured JSONB array (see Prescribed Medications below).
+
+    ```http
+    POST /historias
+    Content-Type: application/json
+
+    {
+      "id_cita": 42,
+      "motivo_consulta": "Dolor de cabeza recurrente con náuseas",
+      "anamnesis": "Paciente refiere episodios de cefalea 3 veces por semana durante el último mes",
+      "examen_fisico": "TA 130/85 mmHg, FC 78 lpm. Sin déficit neurológico focal.",
+      "diagnostico_cie10": "G43.9",
+      "descripcion_diagnostico": "Migraña sin aura, sin mención de estado migrañoso",
+      "plan_tratamiento": "Iniciar profilaxis con Amitriptilina 10mg/noche. Control en 4 semanas.",
+      "medicamentos_recetados": [
+        {
+          "id": 18,
+          "nombre": "Ibuprofeno",
+          "dosis": "400mg",
+          "frecuencia": "cada 8h"
+        }
+      ],
+      "observaciones": "Se recomienda llevar diario de cefaleas"
+    }
+    ```
+  </Step>
+  <Step title="Add Clarification Notes (Optional)">
+    After saving the record, the doctor can append clarification notes at any time — for example, to document updated findings from a follow-up call or lab result.
+
+    ```http
+    POST /historias/:id/aclaracion
+    Content-Type: application/json
+
+    {
+      "aclaracion": "Resultados de MRI sin hallazgos patológicos. Se descarta causa estructural."
+    }
+    ```
+  </Step>
+</Steps>
+
+## Prescribed Medications (JSONB)
+
+The `medicamentos_recetados` field stores an array of prescription objects as PostgreSQL JSONB. Each entry references a medication from the `medicamentos` catalog and includes dosing instructions.
+
+```json
+[
+  {
+    "id": 1,
+    "nombre": "Ibuprofeno",
+    "dosis": "400mg",
+    "frecuencia": "cada 8h"
+  },
+  {
+    "id": 7,
+    "nombre": "Amoxicilina",
+    "dosis": "500mg",
+    "frecuencia": "cada 12h por 7 días"
+  }
+]
+```
+
+<Tip>
+  The `id` field links back to the `medicamentos` table, enabling the frontend to resolve full medication details (lab, presentations, type) at render time. Always include the `id` when building this array.
+</Tip>
+
+## Clarification Notes
+
+Clarification notes allow the treating doctor to append precision updates to an existing clinical record without replacing the original documented content. This is useful after receiving external lab results or when a patient calls with new information.
+
+```http
+POST /historias/:id/aclaracion
+Content-Type: application/json
+
+{
+  "aclaracion": "Cultivo de orina negativo. Se suspende antibiótico y se continúa solo con antiinflamatorio."
+}
+```
+
+<Note>
+  Aclaraciones are additive — they append to the record rather than overwriting any existing field. The original `historia_clinica` data is preserved in full.
+</Note>
+
+## Clinical Documents
+
+External clinical documents — such as laboratory results, imaging reports, or referral letters — can be registered and associated with a clinical record.
+
+<Tabs>
+  <Tab title="Register a Document">
+    Doctors or staff can attach external documents to a clinical record:
+
+    ```http
+    POST /historias/documentos
+    Content-Type: application/json
+
+    {
+      "id_historia": 15,
+      "nombre": "Hemograma completo",
+      "url": "https://storage.melika.app/docs/hemograma-42.pdf",
+      "tipo": "laboratorio"
+    }
+    ```
+  </Tab>
+  <Tab title="Hide a Document (Patient)">
+    Patients can hide specific documents from their visible record view. Hidden documents are not deleted — they remain in the database but are excluded from the patient-facing display.
+
+    ```http
+    PATCH /historias/documentos/:id/ocultar
+    ```
+
+    <Warning>
+      Hiding a document only affects the patient's view. The document remains accessible to the treating doctor and administrative staff.
+    </Warning>
+  </Tab>
+</Tabs>
+
+## PDF Export and In-Browser Viewer
+
+MELIKA provides full PDF generation and in-browser viewing of clinical records.
+
+<CardGroup cols={2}>
+  <Card title="PDF Generation" icon="file-pdf">
+    The `PlantillaHistoriaPDF.jsx` component uses **@react-pdf/renderer** to compile all clinical record fields — including the medication list, CIE-10 code, and clarification notes — into a downloadable PDF document. The PDF is generated client-side on demand.
+  </Card>
+  <Card title="In-Browser Viewer" icon="eye">
+    The `VisorPDFModal.jsx` component uses **@pdfslick/react** to render the generated PDF directly in a modal overlay, allowing patients and doctors to review the document without leaving the application or downloading the file.
+  </Card>
+</CardGroup>
+
+<Tip>
+  PDF generation happens entirely in the browser via `@react-pdf/renderer` — no server-side rendering pipeline is required. The resulting file can be downloaded directly from the viewer modal.
+</Tip>
+
+## Access Control
+
+Clinical records enforce strict role-based access.
+
+| Role | Permissions |
+|---|---|
+| `medico` (treating doctor) | Create record, edit all fields, add aclaraciones, register documents |
+| `paciente` | Read their own records, hide documents from their view |
+| `admin` | Read-only access for auditing; cannot author or edit clinical content |
+
+<Warning>
+  Only the **treating doctor** (the `medico` linked to the original `cita`) can create or modify a clinical record. Other doctors cannot edit records they did not author.
+</Warning>

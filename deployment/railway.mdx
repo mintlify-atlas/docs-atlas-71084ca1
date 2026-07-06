@@ -1,0 +1,243 @@
+---
+title: "Deploy MELIKA on Railway — Frontend, Backend, and Database"
+sidebarTitle: "Railway"
+description: "Step-by-step guide to deploying the MELIKA frontend (React/Vite) and backend (Node.js/Express) as separate Railway services connected to a Railway PostgreSQL database."
+---
+
+Railway is the recommended hosting platform for MELIKA. Its project model maps cleanly to the monorepo's three concerns — a Node.js/Express API, a React/Vite static site, and a managed PostgreSQL database — each running as an isolated service with its own environment, resource limits, and URL. This guide walks through every step from creating the Railway project to verifying a live health-check endpoint, including the critical ordering of environment variables that Vite requires at build time.
+
+## Architecture overview
+
+MELIKA runs as three Railway services within a single project. Keeping them separate gives you independent deploy pipelines, isolated restart behaviour, and per-service environment variable scopes.
+
+<CardGroup cols={3}>
+  <Card title="server" icon="server">
+    Node.js ≥ 20 + Express 5. Reads `DATABASE_URL`, `JWT_SECRET`, `FRONTEND_URL`, and the Gmail OAuth2 variables. Start command: `node src/server.js`.
+  </Card>
+  <Card title="client" icon="browser">
+    React 19 + Vite 8 static build. Needs `VITE_API_URL` set **before** the build runs. Served with the `serve` package. Start command: `npm run start`.
+  </Card>
+  <Card title="postgres" icon="database">
+    Railway-managed PostgreSQL. Automatically injects `DATABASE_URL` into linked services. No manual connection-string management needed.
+  </Card>
+</CardGroup>
+
+## Deployment steps
+
+<Steps>
+  <Step title="Create a Railway project">
+    Log in to [railway.app](https://railway.app) and click **New Project**. Choose **Empty project** — you will add each service manually so you have full control over the configuration order.
+
+    Give the project a name (e.g. `melika`) and note the project URL. All three services will live under this project.
+  </Step>
+  <Step title="Add the PostgreSQL database service">
+    Inside the project, click **New** → **Database** → **Add PostgreSQL**. Railway provisions a managed Postgres instance and immediately makes the following variables available to any service you link to it:
+
+    ```
+    DATABASE_URL
+    PGHOST / PGPORT / PGUSER / PGPASSWORD / PGDATABASE
+    ```
+
+    <Note>
+      Railway injects `DATABASE_URL` automatically into every service that references the Postgres service. You do not need to copy or hard-code the connection string anywhere.
+    </Note>
+  </Step>
+  <Step title="Deploy the backend service">
+    Click **New** → **GitHub Repo** and select your MELIKA repository. Railway will detect the monorepo. Configure the service as follows:
+
+    <Tabs>
+      <Tab title="Service settings">
+        | Setting | Value |
+        |---|---|
+        | **Root directory** | `/server` |
+        | **Build command** | `npm install` |
+        | **Start command** | `node src/server.js` |
+        | **Service name** | `server` |
+      </Tab>
+      <Tab title="Environment variables">
+        Add these variables in **Settings → Variables** for the `server` service:
+
+        ```bash
+        JWT_SECRET=<64-plus-character-random-string>
+        FRONTEND_URL=<leave blank for now — fill in after client deploys>
+
+        GMAIL_USER=noreply@yourapp.com
+        GMAIL_CLIENT_ID=<from Google Cloud Console>
+        GMAIL_CLIENT_SECRET=<from Google Cloud Console>
+        GMAIL_REFRESH_TOKEN=<from OAuth2 Playground>
+        ```
+
+        Then click **Add Reference** → select the `postgres` service → Railway adds `DATABASE_URL` and `PORT` automatically.
+      </Tab>
+    </Tabs>
+
+    Click **Deploy**. Watch the build logs — the server starts when you see output like:
+
+    ```
+    Servidor MELIKA corriendo en puerto 3000
+    ```
+  </Step>
+  <Step title="Apply the database schema">
+    The schema must be applied once to the Railway Postgres instance before the API can serve requests.
+
+    <Tabs>
+      <Tab title="Railway shell (recommended)">
+        Open the `server` service in Railway, click **Shell**, and run:
+
+        ```bash
+        psql $DATABASE_URL -f src/database/melika_db.sql
+        ```
+
+        Railway's internal network gives the shell direct access to Postgres via the injected `DATABASE_URL`.
+      </Tab>
+      <Tab title="Local psql with Railway URL">
+        Copy `DATABASE_URL` from the Postgres service's **Connect** tab (use the public URL that includes the Railway proxy port). Then run locally:
+
+        ```bash
+        psql "postgresql://postgres:<password>@<host>.railway.app:<port>/railway" \
+          -f server/src/database/melika_db.sql
+        ```
+      </Tab>
+    </Tabs>
+
+    After the command completes, verify the tables exist:
+
+    ```sql
+    \dt
+    -- Expected: usuarios, codigos_verificacion, tokens_invitacion,
+    --           especialidades, medicamentos, medicos, franjas_horarias,
+    --           citas, historias_clinicas, logs_citas
+    ```
+  </Step>
+  <Step title="Create the first admin user">
+    Still in the `server` service **Shell** on Railway, run the admin-creation script:
+
+    ```bash
+    node server/scripts/crearAdmin.js
+    ```
+
+    Follow the prompts to set the admin username, email, and password. This account bypasses the email-verification flow and can log in immediately.
+
+    <Note>
+      This step must be performed **after** the schema is applied. The script will fail with a relation-not-found error if the `usuarios` table does not exist yet.
+    </Note>
+  </Step>
+  <Step title="Deploy the frontend service">
+    Back in the Railway project, click **New** → **GitHub Repo** → same MELIKA repository. Configure the service:
+
+    | Setting | Value |
+    |---|---|
+    | **Root directory** | `/client` |
+    | **Build command** | `npm run build` |
+    | **Start command** | `npm run start` |
+    | **Service name** | `client` |
+
+    <Warning>
+      **Do not deploy yet.** `VITE_API_URL` must be set before the build runs because Vite embeds it into the JavaScript bundle at compile time. A build without this variable will produce a client that cannot reach the API.
+    </Warning>
+  </Step>
+  <Step title="Set VITE_API_URL on the frontend service">
+    In the `client` service **Settings → Variables**, add:
+
+    ```bash
+    VITE_API_URL=https://<your-server-service>.up.railway.app
+    ```
+
+    Copy the exact public URL of your `server` service from its **Settings → Networking** section (no trailing slash).
+
+    Now trigger the build by clicking **Deploy** or pushing a commit. Vite will embed `VITE_API_URL` during the build step.
+  </Step>
+  <Step title="Set FRONTEND_URL on the backend service">
+    Once the `client` service has deployed successfully, copy its public URL from **Settings → Networking**. Go back to the `server` service variables and set:
+
+    ```bash
+    FRONTEND_URL=https://<your-client-service>.up.railway.app
+    ```
+
+    Railway will automatically redeploy the server with the updated CORS configuration.
+
+    <Warning>
+      The value of `FRONTEND_URL` must match the client's URL **exactly** — same scheme (`https://`), same hostname, **no trailing slash**. A mismatch will cause browsers to block all cross-origin API requests with a CORS error.
+    </Warning>
+  </Step>
+</Steps>
+
+## client/railway.json
+
+The `/client` directory includes a `railway.json` configuration file that Railway reads automatically when deploying the client service. It codifies the build and start commands so you do not need to re-enter them manually in the dashboard. If you need to change build behaviour (e.g. add a Node.js version constraint or override the build command), edit `client/railway.json` rather than the dashboard setting, so the configuration stays in version control.
+
+```json client/railway.json
+{
+  "$schema": "https://railway.app/railway-schema.json",
+  "build": {
+    "builder": "NIXPACKS"
+  },
+  "deploy": {
+    "startCommand": "npm run start",
+    "restartPolicyType": "ON_FAILURE"
+  }
+}
+```
+
+## Verifying the deployment
+
+Once all three services are running, confirm the backend is healthy with a GET request to the root endpoint:
+
+```bash
+curl https://<your-server-service>.up.railway.app/
+```
+
+A healthy server returns:
+
+```json
+{
+  "status": "ok",
+  "message": "Servidor MELIKA funcionando correctamente"
+}
+```
+
+Then open the frontend URL in a browser, log in with the admin credentials you created in step 5, and confirm that the dashboard loads and API calls succeed.
+
+## Environment variable reference summary
+
+<Tabs>
+  <Tab title="server service">
+    ```bash
+    # Injected automatically by Railway
+    PORT                  # assigned by Railway
+    DATABASE_URL          # injected from linked Postgres service
+
+    # Set manually
+    JWT_SECRET            # long random string — never share
+    FRONTEND_URL          # exact URL of the client service (no trailing slash)
+    GMAIL_USER            # sender Gmail address
+    GMAIL_CLIENT_ID       # Google Cloud OAuth2 client ID
+    GMAIL_CLIENT_SECRET   # Google Cloud OAuth2 client secret
+    GMAIL_REFRESH_TOKEN   # OAuth2 refresh token
+    ```
+  </Tab>
+  <Tab title="client service">
+    ```bash
+    # Must be set BEFORE the build runs
+    VITE_API_URL          # exact URL of the server service (no trailing slash)
+    ```
+  </Tab>
+</Tabs>
+
+## Common issues
+
+<Accordion title="CORS errors in the browser console">
+  The most common cause is a mismatch between `FRONTEND_URL` on the server and the actual client URL. Check for a trailing slash, an `http://` vs `https://` difference, or a stale Railway-generated subdomain. Copy the URL directly from the Railway dashboard and update the variable, then redeploy the server service.
+</Accordion>
+
+<Accordion title="API calls return 'Failed to fetch' or network errors">
+  This usually means `VITE_API_URL` was not set when the frontend was built. The compiled bundle is calling `undefined` as the base URL. Set the correct `VITE_API_URL` value and trigger a fresh build by redeploying the client service.
+</Accordion>
+
+<Accordion title="Database connection refused on first deploy">
+  Make sure the `server` service has the Postgres service referenced (not just the `DATABASE_URL` string copied manually). Railway's internal networking is only active for services within the same project that are properly linked.
+</Accordion>
+
+<Accordion title="Admin script fails with 'relation does not exist'">
+  The schema has not been applied yet. Run `psql $DATABASE_URL -f src/database/melika_db.sql` in the Railway shell first, then retry `node server/scripts/crearAdmin.js`.
+</Accordion>

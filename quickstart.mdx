@@ -1,47 +1,185 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get Started with MELIKA in Under 10 Minutes"
+sidebarTitle: "Quickstart"
+description: "Clone the repo, configure environment variables, run the database schema, and boot both services to have a fully working MELIKA instance running locally."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
-
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
+This guide walks you through every command needed to run MELIKA on your local machine. By the end you will have the Express API listening on port `3000`, the React frontend on port `5173`, and both connected to a local PostgreSQL database — ready to log in, book appointments, and explore all three user roles.
 
 ## Prerequisites
 
-Before you begin, you must have:
+Before you start, make sure the following are installed and available on your `PATH`:
 
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
+| Requirement | Minimum version | Notes |
+|---|---|---|
+| **Node.js** | 20.x | The client `package.json` enforces `"node": ">=20.0.0"` |
+| **npm** | bundled with Node.js | Used for both server and client dependencies |
+| **PostgreSQL** | 14+ recommended | Must be running locally with a user that can create databases |
+| **Git** | any recent version | For cloning the repository |
+| **psql** | bundled with PostgreSQL | Used to apply the database schema file |
 
-## Get started
+## Setup Steps
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
+  <Step title="Clone the repository">
+    Clone the project from GitHub and move into the project root.
 
     ```bash
-    npm install your-package
+    git clone https://github.com/Imjuanisss/proyecto-melika.git
+    cd proyecto-melika
     ```
   </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
+
+  <Step title="Install server dependencies">
+    Navigate into the `server` directory and install all Node.js dependencies.
 
     ```bash
-    your-cli init
+    cd server
+    npm install
+    ```
+
+    This installs Express 5, `pg`, `jsonwebtoken`, `bcrypt`, `nodemailer`, `googleapis`, `cors`, and `dotenv`, along with `nodemon` as a dev dependency.
+  </Step>
+
+  <Step title="Configure server environment variables">
+    Create a `.env` file inside the `server/` directory. MELIKA's `db.js` reads individual `DB_*` variables, while the rest control auth, CORS, and email.
+
+    ```bash
+    # server/.env
+
+    # Server
+    PORT=3000
+
+    # PostgreSQL — individual variables consumed by pg.Pool in src/config/db.js
+    DB_HOST=localhost
+    DB_PORT=5432
+    DB_NAME=melika_db
+    DB_USER=your_pg_user
+    DB_PASSWORD=your_pg_password
+
+    # JWT
+    JWT_SECRET=your_super_secret_jwt_key_change_in_production
+
+    # CORS — the frontend origin that the server will allow
+    FRONTEND_URL=http://localhost:5173
+
+    # Email (Nodemailer + Gmail OAuth2)
+    GMAIL_USER=your_gmail_address@gmail.com
+    GMAIL_CLIENT_ID=your_google_oauth_client_id
+    GMAIL_CLIENT_SECRET=your_google_oauth_client_secret
+    GMAIL_REFRESH_TOKEN=your_google_oauth_refresh_token
+    ```
+
+    <Note>
+      The Gmail credentials are used by Nodemailer to send verification codes and doctor invitation emails. For local testing you can substitute an [App Password](https://support.google.com/accounts/answer/185833) if you prefer not to configure OAuth2.
+    </Note>
+  </Step>
+
+  <Step title="Create the database and run the schema">
+    Create the `melika_db` database (if it does not exist yet), then apply the full schema file. This creates all tables, indexes, functions, and triggers in a single pass.
+
+    ```bash
+    # Create the database (run as a PostgreSQL superuser if needed)
+    createdb melika_db
+
+    # Apply the schema
+    psql -d melika_db -f src/database/melika_db.sql
+    ```
+
+    The schema file provisions tables for users, appointments, clinical records, doctor schedules, medications, audit logs, and more — all in the correct dependency order.
+  </Step>
+
+  <Step title="Start the backend server">
+    From inside the `server/` directory, start the development server. `nodemon` watches `src/server.js` and restarts automatically on file changes.
+
+    ```bash
+    npm run dev
+    ```
+
+    You should see the following confirmation in your terminal:
+
+    ```
+    Servidor MELIKA listo y escuchando en el puerto 3000
     ```
   </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
+
+  <Step title="Install frontend dependencies">
+    Open a new terminal, navigate to the `client/` directory, and install the React dependencies.
 
     ```bash
-    your-cli start
+    cd ../client
+    npm install
     ```
+
+    This installs React 19, React Router DOM v7, FullCalendar 6, `@react-pdf/renderer`, `@pdfslick/react`, and Vite 8, among others.
+  </Step>
+
+  <Step title="Configure client environment variables">
+    Create a `.env` file inside the `client/` directory. The `apiClient.js` module reads `VITE_API_URL` to build every HTTP request.
+
+    ```bash
+    # client/.env
+    VITE_API_URL=http://localhost:3000
+    ```
+
+    If you changed the backend port, update this value to match.
+  </Step>
+
+  <Step title="Start the frontend">
+    From inside the `client/` directory, start the Vite development server.
+
+    ```bash
+    npm run dev
+    ```
+
+    Vite will print the local URL — by default `http://localhost:5173`. Open that address in your browser.
   </Step>
 </Steps>
 
-<Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
+## Verify the Backend Is Running
 
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
+Before opening the browser, confirm the API is healthy with a quick `GET` to the root endpoint:
+
+```bash
+curl http://localhost:3000/
+```
+
+Expected response:
+
+```json
+{
+  "status": "ok",
+  "message": "Servidor MELIKA funcionando correctamente"
+}
+```
+
+A `200 OK` with that body means Express is up, the middleware is loaded, and all routes are registered.
+
+## Create the First Admin User
+
+MELIKA does not expose a public sign-up flow for admin accounts. Use the bundled seed script to create the first administrator directly in the database:
+
+```bash
+# Run from the server/ directory
+node scripts/crearAdmin.js
+```
+
+The script inserts a new user with the `admin` role. Check the script source at `server/scripts/crearAdmin.js` to see the default credentials and update them before running in any shared environment.
+
+## CORS Configuration
+
+The server allows requests from the following origins by default (configured in `src/server.js`):
+
+```js
+const allowedOrigins = [
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  process.env.FRONTEND_URL   // your FRONTEND_URL env var
+];
+```
+
+Requests from any other origin will receive a `403 No permitido por CORS` error. To allow additional origins (such as a staging domain), add them to `FRONTEND_URL` or extend the `allowedOrigins` array.
+
+<Tip>
+  **Deploying to production?** MELIKA is pre-configured for [Railway](https://railway.app). Railway can host the Express backend, React frontend (built with `npm run build`), and a managed PostgreSQL instance — all under a single project. Set the same environment variables shown above in each Railway service's **Variables** tab. See the Deployment guide for a step-by-step walkthrough.
 </Tip>

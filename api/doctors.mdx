@@ -1,0 +1,619 @@
+---
+title: "Doctors API — Profiles, Account Activation, and Admin Management"
+sidebarTitle: "Doctors"
+description: "Endpoints for doctor account activation via invitation token, admin CRUD for physician profiles, and doctor self-service profile access in MELIKA."
+---
+
+The Doctors API covers the full physician lifecycle in MELIKA: administrators register doctors and send invitation emails, doctors activate their accounts through a secure token flow, and once active, doctors can access their own profile and manage appointment outcomes. All routes share the `/medicos` prefix for admin operations and `/medico` for doctor self-service actions. The server runs on `PORT` (default `3000`).
+
+---
+
+## Account Activation Flow
+
+Before a doctor can log in, an administrator must first create their profile via `POST /medicos`. MELIKA then generates a short-lived invitation token and emails it to the doctor. The doctor visits the activation link and submits their token alongside a chosen password to `POST /medicos/activar`, which creates their user account and marks the invitation as used.
+
+<Info>
+  The invitation token is stored in the `tokens_invitacion` table and is single-use. Submitting an expired or already-used token returns an error.
+</Info>
+
+```
+Admin → POST /medicos → invitation email sent to doctor
+Doctor → POST /medicos/activar (token + password) → account created
+```
+
+---
+
+## Doctor Activation
+
+### Activate Doctor Account
+
+<Note>
+  This is the only public endpoint in the Doctors API — no authentication token is required.
+</Note>
+
+```http
+POST /medicos/activar
+```
+
+Verifies the invitation token against the `tokens_invitacion` table, confirms it has not been used and has not expired, then creates a `usuario` record with `rol='medico'` and the supplied bcrypt-hashed password. The token is marked as used immediately after a successful activation.
+
+#### Request Body
+
+<ParamField body="token" type="string" required>
+  The invitation token delivered to the doctor's email address.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  The password the doctor wants to set for their account. Stored as a bcrypt hash.
+</ParamField>
+
+#### Response
+
+<ResponseField name="mensaje" type="string">
+  Confirmation message: `"Cuenta de médico activada correctamente."`
+</ResponseField>
+
+#### Errors
+
+| Status | Description |
+|--------|-------------|
+| `400`  | Token not found, already used, or expired. |
+| `500`  | Internal server error. |
+
+#### Example
+
+<CodeGroup>
+```bash cURL
+curl -X POST http://localhost:3000/medicos/activar \
+  -H "Content-Type: application/json" \
+  -d '{
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+    "password": "MiContraseñaSegura123!"
+  }'
+```
+
+```json Response
+{
+  "mensaje": "Cuenta de médico activada correctamente."
+}
+```
+</CodeGroup>
+
+---
+
+## Admin — Doctor Management
+
+All endpoints in this section require a valid Bearer token from an administrator account. Include the header `Authorization: Bearer <token>` on every request.
+
+### List All Doctors
+
+```http
+GET /medicos
+```
+
+Returns a flat array of all doctor records, each joined with their linked `usuario` and `especialidad` rows. Useful for building directory listings or admin dashboards.
+
+**Auth:** `verifyToken` + `isAdmin`
+
+#### Response
+
+<ResponseField name="medicos" type="array">
+  Array of doctor objects.
+
+  <Expandable title="Doctor object fields">
+    <ResponseField name="id" type="integer">
+      Unique identifier of the `medico` record.
+    </ResponseField>
+    <ResponseField name="nombre" type="string">
+      Doctor's first name (from `usuario`).
+    </ResponseField>
+    <ResponseField name="primer_apellido" type="string">
+      Doctor's first surname (from `usuario`).
+    </ResponseField>
+    <ResponseField name="email" type="string">
+      Doctor's email address (from `usuario`).
+    </ResponseField>
+    <ResponseField name="especialidad" type="string">
+      Name of the doctor's medical specialty (from `especialidad`).
+    </ResponseField>
+    <ResponseField name="numero_registro" type="string">
+      Official medical registration number.
+    </ResponseField>
+    <ResponseField name="tarifa" type="number">
+      Consultation fee.
+    </ResponseField>
+    <ResponseField name="calificacion" type="number">
+      Average rating score.
+    </ResponseField>
+    <ResponseField name="activo" type="boolean">
+      Whether the doctor account is currently active.
+    </ResponseField>
+    <ResponseField name="acepta_teleconsulta" type="boolean">
+      Whether the doctor accepts video/remote consultations.
+    </ResponseField>
+    <ResponseField name="acepta_presencial" type="boolean">
+      Whether the doctor accepts in-person consultations.
+    </ResponseField>
+    <ResponseField name="anos_experiencia" type="integer">
+      Years of professional experience.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+#### Errors
+
+| Status | Description |
+|--------|-------------|
+| `401`  | Missing or invalid Bearer token. |
+| `403`  | Authenticated user is not an administrator. |
+| `500`  | Internal server error. |
+
+#### Example
+
+<CodeGroup>
+```bash cURL
+curl -X GET http://localhost:3000/medicos \
+  -H "Authorization: Bearer <admin_token>"
+```
+
+```json Response
+[
+  {
+    "id": 1,
+    "nombre": "Laura",
+    "primer_apellido": "Gómez",
+    "email": "laura.gomez@clinica.com",
+    "especialidad": "Cardiología",
+    "numero_registro": "MED-00123",
+    "tarifa": 85.00,
+    "calificacion": 4.8,
+    "activo": true,
+    "acepta_teleconsulta": true,
+    "acepta_presencial": true,
+    "anos_experiencia": 12
+  }
+]
+```
+</CodeGroup>
+
+---
+
+### Create Doctor Profile
+
+```http
+POST /medicos
+```
+
+Creates a new `medico` record and its linked `usuario` shell, generates an invitation token, and dispatches an activation email to the provided address. The doctor completes registration by calling `POST /medicos/activar` with the token they receive.
+
+**Auth:** `verifyToken` + `isAdmin`
+
+#### Request Body
+
+<ParamField body="nombre" type="string" required>
+  Doctor's first name.
+</ParamField>
+
+<ParamField body="primer_apellido" type="string" required>
+  Doctor's first surname.
+</ParamField>
+
+<ParamField body="email" type="string" required>
+  Email address where the activation invitation will be sent. Must be unique.
+</ParamField>
+
+<ParamField body="id_especialidad" type="integer" required>
+  ID of the doctor's medical specialty from the `especialidades` table.
+</ParamField>
+
+<ParamField body="numero_registro" type="string" required>
+  Official medical license or registration number.
+</ParamField>
+
+<ParamField body="tarifa" type="number">
+  Consultation fee amount.
+</ParamField>
+
+<ParamField body="calificacion" type="number">
+  Initial rating score (optional; typically set after reviews accumulate).
+</ParamField>
+
+<ParamField body="acepta_teleconsulta" type="boolean">
+  Set to `true` if the doctor offers remote/video consultations.
+</ParamField>
+
+<ParamField body="acepta_presencial" type="boolean">
+  Set to `true` if the doctor accepts in-person appointments.
+</ParamField>
+
+<ParamField body="biografia" type="string">
+  Short professional biography displayed on the doctor's public profile.
+</ParamField>
+
+<ParamField body="anos_experiencia" type="integer">
+  Number of years of professional experience.
+</ParamField>
+
+#### Response `201`
+
+<ResponseField name="mensaje" type="string">
+  Confirmation that the profile was created and the invitation email was sent.
+</ResponseField>
+
+<ResponseField name="medico" type="object">
+  The newly created `medico` record.
+
+  <Expandable title="medico object fields">
+    <ResponseField name="id" type="integer">Unique medico ID.</ResponseField>
+    <ResponseField name="nombre" type="string">First name.</ResponseField>
+    <ResponseField name="primer_apellido" type="string">First surname.</ResponseField>
+    <ResponseField name="email" type="string">Email address.</ResponseField>
+    <ResponseField name="especialidad" type="string">Specialty name.</ResponseField>
+    <ResponseField name="numero_registro" type="string">Registration number.</ResponseField>
+    <ResponseField name="tarifa" type="number">Consultation fee.</ResponseField>
+    <ResponseField name="calificacion" type="number">Rating.</ResponseField>
+    <ResponseField name="activo" type="boolean">Account status.</ResponseField>
+    <ResponseField name="acepta_teleconsulta" type="boolean">Teleconsultation flag.</ResponseField>
+    <ResponseField name="acepta_presencial" type="boolean">In-person flag.</ResponseField>
+    <ResponseField name="anos_experiencia" type="integer">Years of experience.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+#### Errors
+
+| Status | Description |
+|--------|-------------|
+| `400`  | Missing required fields or validation failure. |
+| `401`  | Missing or invalid Bearer token. |
+| `403`  | Authenticated user is not an administrator. |
+| `409`  | A doctor with that email already exists. |
+| `500`  | Internal server error or email dispatch failure. |
+
+#### Example
+
+<CodeGroup>
+```bash cURL
+curl -X POST http://localhost:3000/medicos \
+  -H "Authorization: Bearer <admin_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nombre": "Carlos",
+    "primer_apellido": "Herrera",
+    "email": "carlos.herrera@clinica.com",
+    "id_especialidad": 3,
+    "numero_registro": "MED-00456",
+    "tarifa": 70.00,
+    "acepta_teleconsulta": true,
+    "acepta_presencial": false,
+    "biografia": "Especialista en medicina interna con 8 años de experiencia.",
+    "anos_experiencia": 8
+  }'
+```
+
+```json Response 201
+{
+  "mensaje": "Médico creado. Se ha enviado un correo de invitación.",
+  "medico": {
+    "id": 7,
+    "nombre": "Carlos",
+    "primer_apellido": "Herrera",
+    "email": "carlos.herrera@clinica.com",
+    "especialidad": "Medicina Interna",
+    "numero_registro": "MED-00456",
+    "tarifa": 70.00,
+    "calificacion": null,
+    "activo": false,
+    "acepta_teleconsulta": true,
+    "acepta_presencial": false,
+    "anos_experiencia": 8
+  }
+}
+```
+</CodeGroup>
+
+---
+
+### Update Doctor Profile
+
+```http
+PUT /medicos/:id
+```
+
+Replaces the editable fields on both the `medico` record and its linked `usuario` row. The doctor's email cannot be changed through this endpoint.
+
+**Auth:** `verifyToken` + `isAdmin`
+
+#### Path Parameters
+
+<ParamField path="id" type="integer" required>
+  The numeric ID of the `medico` record to update.
+</ParamField>
+
+#### Request Body
+
+<ParamField body="nombre" type="string">
+  Updated first name.
+</ParamField>
+
+<ParamField body="primer_apellido" type="string">
+  Updated first surname.
+</ParamField>
+
+<ParamField body="id_especialidad" type="integer">
+  Updated specialty ID.
+</ParamField>
+
+<ParamField body="numero_registro" type="string">
+  Updated registration number.
+</ParamField>
+
+<ParamField body="tarifa" type="number">
+  Updated consultation fee.
+</ParamField>
+
+<ParamField body="calificacion" type="number">
+  Updated rating score.
+</ParamField>
+
+<ParamField body="acepta_teleconsulta" type="boolean">
+  Updated teleconsultation preference.
+</ParamField>
+
+<ParamField body="acepta_presencial" type="boolean">
+  Updated in-person preference.
+</ParamField>
+
+<ParamField body="biografia" type="string">
+  Updated biography text.
+</ParamField>
+
+<ParamField body="anos_experiencia" type="integer">
+  Updated years of experience.
+</ParamField>
+
+#### Response
+
+<ResponseField name="mensaje" type="string">
+  Confirmation of the update.
+</ResponseField>
+
+<ResponseField name="medico" type="object">
+  The fully updated `medico` object (same shape as the list response).
+</ResponseField>
+
+#### Errors
+
+| Status | Description |
+|--------|-------------|
+| `401`  | Missing or invalid Bearer token. |
+| `403`  | Authenticated user is not an administrator. |
+| `404`  | No doctor found with the given ID. |
+| `500`  | Internal server error. |
+
+#### Example
+
+<CodeGroup>
+```bash cURL
+curl -X PUT http://localhost:3000/medicos/7 \
+  -H "Authorization: Bearer <admin_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nombre": "Carlos Alberto",
+    "tarifa": 75.00,
+    "acepta_presencial": true
+  }'
+```
+
+```json Response
+{
+  "mensaje": "Médico actualizado correctamente.",
+  "medico": {
+    "id": 7,
+    "nombre": "Carlos Alberto",
+    "primer_apellido": "Herrera",
+    "email": "carlos.herrera@clinica.com",
+    "especialidad": "Medicina Interna",
+    "numero_registro": "MED-00456",
+    "tarifa": 75.00,
+    "calificacion": null,
+    "activo": false,
+    "acepta_teleconsulta": true,
+    "acepta_presencial": true,
+    "anos_experiencia": 8
+  }
+}
+```
+</CodeGroup>
+
+---
+
+### Toggle Doctor Active Status
+
+```http
+PATCH /medicos/:id/estado
+```
+
+Toggles the `activo` boolean on the doctor's record. Deactivating a doctor prevents them from logging in and hides them from patient-facing search results. Re-activating reverses this.
+
+**Auth:** `verifyToken` + `isAdmin`
+
+#### Path Parameters
+
+<ParamField path="id" type="integer" required>
+  The numeric ID of the `medico` record whose status should be toggled.
+</ParamField>
+
+#### Response
+
+<ResponseField name="mensaje" type="string">
+  `"Médico activado."` if the account was just enabled, or `"Médico desactivado."` if it was just disabled.
+</ResponseField>
+
+#### Errors
+
+| Status | Description |
+|--------|-------------|
+| `401`  | Missing or invalid Bearer token. |
+| `403`  | Authenticated user is not an administrator. |
+| `404`  | No doctor found with the given ID. |
+| `500`  | Internal server error. |
+
+#### Example
+
+<CodeGroup>
+```bash cURL
+curl -X PATCH http://localhost:3000/medicos/7/estado \
+  -H "Authorization: Bearer <admin_token>"
+```
+
+```json Response — deactivated
+{
+  "mensaje": "Médico desactivado."
+}
+```
+
+```json Response — activated
+{
+  "mensaje": "Médico activado."
+}
+```
+</CodeGroup>
+
+---
+
+## Doctor Self-Service
+
+The following endpoints are available to authenticated doctors only. Use the Bearer token issued at login with `rol='medico'`.
+
+### Get Own Profile
+
+```http
+GET /medico/perfil
+```
+
+Returns the authenticated doctor's full profile by joining their `medico`, `usuario`, and `especialidad` rows. Doctors use this to display their own information within the platform.
+
+**Auth:** `verifyToken` + `isMedico`
+
+#### Response
+
+<ResponseField name="perfil" type="object">
+  The doctor's own profile record. Contains the same fields as the admin list response (id, nombre, primer\_apellido, email, especialidad, numero\_registro, tarifa, calificacion, activo, acepta\_teleconsulta, acepta\_presencial, anos\_experiencia).
+</ResponseField>
+
+#### Errors
+
+| Status | Description |
+|--------|-------------|
+| `401`  | Missing or invalid Bearer token. |
+| `403`  | Authenticated user is not a doctor. |
+| `404`  | Doctor profile not found for the authenticated user. |
+| `500`  | Internal server error. |
+
+#### Example
+
+<CodeGroup>
+```bash cURL
+curl -X GET http://localhost:3000/medico/perfil \
+  -H "Authorization: Bearer <medico_token>"
+```
+
+```json Response
+{
+  "perfil": {
+    "id": 7,
+    "nombre": "Carlos Alberto",
+    "primer_apellido": "Herrera",
+    "email": "carlos.herrera@clinica.com",
+    "especialidad": "Medicina Interna",
+    "numero_registro": "MED-00456",
+    "tarifa": 75.00,
+    "calificacion": 4.6,
+    "activo": true,
+    "acepta_teleconsulta": true,
+    "acepta_presencial": true,
+    "anos_experiencia": 8
+  }
+}
+```
+</CodeGroup>
+
+---
+
+### Manage Appointment Outcome
+
+```http
+PATCH /medico/citas/:id/gestionar
+```
+
+Allows the authenticated doctor to record the final outcome of a completed appointment slot. Only the two terminal states are accepted: `completada` (the patient attended) and `no_asistio` (the patient did not show up).
+
+**Auth:** `verifyToken` + `isMedico`
+
+#### Path Parameters
+
+<ParamField path="id" type="integer" required>
+  The numeric ID of the `cita` (appointment) to update.
+</ParamField>
+
+#### Request Body
+
+<ParamField body="estado" type="string" required>
+  The outcome to record. Accepted values: `"completada"` or `"no_asistio"`.
+</ParamField>
+
+#### Response
+
+<ResponseField name="mensaje" type="string">
+  Confirmation that the appointment state was updated.
+</ResponseField>
+
+<ResponseField name="cita" type="object">
+  The updated `cita` record.
+
+  <Expandable title="cita object fields">
+    <ResponseField name="id" type="integer">Appointment ID.</ResponseField>
+    <ResponseField name="estado" type="string">New state: `"completada"` or `"no_asistio"`.</ResponseField>
+    <ResponseField name="fecha" type="string">Date of the appointment (YYYY-MM-DD).</ResponseField>
+    <ResponseField name="hora_inicio" type="string">Slot start time (HH:MM).</ResponseField>
+    <ResponseField name="hora_fin" type="string">Slot end time (HH:MM).</ResponseField>
+    <ResponseField name="motivo" type="string">Patient's stated reason for the visit.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+#### Errors
+
+| Status | Description |
+|--------|-------------|
+| `400`  | Invalid `estado` value supplied. |
+| `401`  | Missing or invalid Bearer token. |
+| `403`  | Authenticated user is not a doctor, or the appointment belongs to another doctor. |
+| `404`  | No appointment found with the given ID. |
+| `500`  | Internal server error. |
+
+#### Example
+
+<CodeGroup>
+```bash cURL
+curl -X PATCH http://localhost:3000/medico/citas/42/gestionar \
+  -H "Authorization: Bearer <medico_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "estado": "completada"
+  }'
+```
+
+```json Response
+{
+  "mensaje": "Estado de la cita actualizado correctamente.",
+  "cita": {
+    "id": 42,
+    "estado": "completada",
+    "fecha": "2025-07-15",
+    "hora_inicio": "09:00",
+    "hora_fin": "09:40",
+    "motivo": "Revisión de resultados de análisis"
+  }
+}
+```
+</CodeGroup>

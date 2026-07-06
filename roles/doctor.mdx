@@ -1,0 +1,231 @@
+---
+title: "Doctor Role: Managing Schedules and Clinical Records"
+sidebarTitle: "Doctor"
+description: "How MELIKA doctors activate their accounts via invitation, manage 40-minute availability slots, run their daily agenda, and create structured clinical histories."
+---
+
+Doctors in MELIKA do not self-register. An administrator creates each doctor account and the platform delivers an invitation email containing a one-time activation token. Once activated, the doctor gains access to a dedicated dashboard where they can configure their weekly availability, track their daily agenda, and build a longitudinal clinical record for every patient they treat.
+
+## Account Activation
+
+<Steps>
+  <Step title="Admin creates the doctor">
+    An administrator fills in the doctor's profile and submits a `POST /medicos` request. MELIKA stores the record and immediately dispatches an invitation email to the doctor's address containing a unique activation token. The account is created in an **inactive** state.
+  </Step>
+  <Step title="Doctor clicks the activation link">
+    The invitation email contains a link that embeds the activation token. Clicking it opens the MELIKA password-setup screen in the browser.
+  </Step>
+  <Step title="Doctor sets their password">
+    The activation form sends a `POST` to `/medicos/activar` with the token and the chosen password:
+
+    ```json
+    {
+      "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+      "password": "SecurePassword123!"
+    }
+    ```
+
+    On success, the account becomes active, the token is invalidated, and the doctor is redirected to `/dashboard-medico`.
+  </Step>
+</Steps>
+
+<Note>
+  Activation tokens are single-use and expire after a fixed window. If the doctor does not activate in time, an administrator must issue a new invitation from the admin panel.
+</Note>
+
+## Doctor Profile
+
+Each doctor's profile is accessible via `GET /medico/perfil`. The response joins the `medicos` record with the linked `usuario` and `especialidad` rows, exposing the following fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `id_especialidad` | `integer` | Linked medical specialty |
+| `numero_registro` | `string` | Professional registration number |
+| `tarifa` | `decimal` | Consultation fee |
+| `calificacion` | `decimal` | Average rating from patients |
+| `acepta_teleconsulta` | `boolean` | Whether remote consultations are offered |
+| `acepta_presencial` | `boolean` | Whether in-person consultations are offered |
+| `biografia` | `text` | Short professional biography |
+| `anos_experiencia` | `integer` | Years of clinical experience |
+
+```http
+GET /medico/perfil
+Authorization: Bearer <token>
+```
+
+## Schedule Management
+
+Doctors control their own availability by creating and managing **time slots (franjas)**. Each slot is 40 minutes long. Patients can only book appointments into slots that are marked as available.
+
+### Creating a Slot
+
+```http
+POST /medico/franjas
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+```json
+{
+  "id_medico": 3,
+  "fecha": "2025-08-18",
+  "hora_inicio": "08:00",
+  "hora_fin": "08:40"
+}
+```
+
+The slot is created with `disponible = true` by default, making it immediately bookable by patients.
+
+### Listing Slots by Date
+
+```http
+GET /medico/franjas?fecha=2025-08-18
+Authorization: Bearer <token>
+```
+
+Returns all slots for the specified date, each including its `disponible` status and any linked appointment ID.
+
+### Editing a Slot
+
+```http
+PATCH /medico/franjas/:id
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+```json
+{
+  "hora_inicio": "08:30",
+  "hora_fin": "09:10"
+}
+```
+
+<Warning>
+  A slot can only be edited if **no active appointment** is currently booked into it. Attempting to edit a reserved slot returns a `409 Conflict` error.
+</Warning>
+
+### Deleting a Slot
+
+```http
+DELETE /medico/franjas/:id
+Authorization: Bearer <token>
+```
+
+Deletion is permitted only when `disponible = true` (i.e., the slot is free). Slots with a confirmed or pending appointment cannot be removed.
+
+## Daily and Range Agenda
+
+<Tabs>
+  <Tab title="Daily Agenda">
+    Retrieves every slot and its associated appointment details for a single date — ideal for the doctor's daily schedule view.
+
+    ```http
+    GET /medico/agenda?fecha=2025-08-18
+    Authorization: Bearer <token>
+    ```
+
+    The response lists slots in chronological order with patient name, appointment status, and consultation type (teleconsulta / presencial).
+  </Tab>
+  <Tab title="Range Agenda">
+    Returns FullCalendar-compatible event objects for a date range. Used to populate the interactive calendar on the doctor dashboard.
+
+    ```http
+    GET /medico/agenda/rango?inicio=2025-08-01&fin=2025-08-31
+    Authorization: Bearer <token>
+    ```
+
+    Each event object includes `title`, `start`, `end`, `color`, and a metadata payload for rendering appointment details in calendar popovers.
+  </Tab>
+</Tabs>
+
+## Managing Appointment Outcomes
+
+After a scheduled appointment time passes, the doctor records its outcome via:
+
+```http
+PATCH /medico/citas/:id/gestionar
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+```json
+{
+  "estado": "completada"
+}
+```
+
+The `estado` field accepts exactly two values:
+
+| Value | Meaning |
+|---|---|
+| `completada` | The patient attended and the consultation was carried out |
+| `no_asistio` | The patient did not attend |
+
+Setting the outcome to `completada` unlocks the clinical record creation form for that appointment.
+
+## Clinical Records
+
+Doctors create and maintain structured clinical histories linked to specific appointments.
+
+<Tabs>
+  <Tab title="Create Record">
+    Once an appointment is marked `completada`, the doctor can create the initial clinical record:
+
+    ```http
+    POST /historias
+    Authorization: Bearer <token>
+    Content-Type: application/json
+    ```
+
+    ```json
+    {
+      "id_cita": 88,
+      "motivo_consulta": "Persistent headache for two weeks",
+      "diagnostico": "Tension-type headache",
+      "tratamiento": "Ibuprofen 400 mg every 8 h for 5 days",
+      "observaciones": "Follow-up in 2 weeks if no improvement"
+    }
+    ```
+  </Tab>
+  <Tab title="Update Record">
+    Evolution notes and updates to an existing record are submitted via `PUT`:
+
+    ```http
+    PUT /historias/:id
+    Authorization: Bearer <token>
+    Content-Type: application/json
+    ```
+
+    ```json
+    {
+      "tratamiento": "Switched to naproxen 500 mg — better tolerance",
+      "observaciones": "Patient reports improvement after 3 days"
+    }
+    ```
+  </Tab>
+  <Tab title="Add Clarification">
+    When a doctor needs to annotate a previously filed record without overwriting it, they add a clarification note:
+
+    ```http
+    POST /historias/:id/aclaracion
+    Authorization: Bearer <token>
+    Content-Type: application/json
+    ```
+
+    ```json
+    {
+      "nota": "Laboratory results received after consultation confirm diagnosis. No medication change required."
+    }
+    ```
+
+    Clarifications are appended as immutable entries, preserving the original record's integrity.
+  </Tab>
+</Tabs>
+
+<Tip>
+  The `FormularioAclaracion` component is mounted **globally** in the frontend (at the root level of `App.jsx`), not inside individual route pages. This means the clarification modal can be triggered from any screen within the doctor's authenticated session — for example, directly from the agenda view — without requiring a full page navigation to the record detail.
+</Tip>
+
+## Dashboard and Route Guard
+
+The doctor dashboard is served at `/dashboard-medico`. The `RutaMedico` guard in `App.jsx` verifies that the JWT `rol` claim equals `medico` before rendering any nested route. Patients or administrators hitting a doctor-only route are redirected to their respective dashboards.
