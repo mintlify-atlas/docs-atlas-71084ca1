@@ -1,7 +1,7 @@
 ---
-title: "Authentication API — Registration, Login, and Password Recovery"
+title: "MELIKA Authentication API: Register, Login & Recovery"
 sidebarTitle: "Authentication"
-description: "MELIKA's authentication endpoints handle user registration, email verification with 6-digit codes, JWT login, and a secure two-step password recovery flow."
+description: "MELIKA auth endpoints cover registration with email verification, JWT login, and a two-step password recovery flow. All routes are public, no token needed."
 ---
 
 MELIKA uses **JWT Bearer tokens** for authentication. All `/auth/*` endpoints are public — no token is required to register, log in, or recover a password. Once logged in, include the token in every request to a protected route via the `Authorization` header. Tokens carry a minimal payload (`id`, `nombre`, `rol`) and expire after **8 hours**.
@@ -31,35 +31,35 @@ Registers a new user account. The account is created with `activo = FALSE` and `
 ### Request body
 
 <ParamField body="nombre" type="string" required>
-  First name of the user.
+  First name of the user. Must be at least 2 characters. Only letters, spaces, hyphens, and apostrophes are allowed — numbers and purely repeated characters are rejected.
 </ParamField>
 
 <ParamField body="primer_apellido" type="string" required>
-  First surname of the user.
+  First surname of the user. Same character rules as `nombre`.
 </ParamField>
 
 <ParamField body="email" type="string" required>
-  Unique email address. Used as the login identifier and for sending verification codes.
+  Unique email address. Used as the login identifier and for sending verification codes. Must match the format `local@domain.tld`.
 </ParamField>
 
 <ParamField body="password" type="string" required>
-  Account password. Must satisfy the rules enforced by `validarRegistroUsuario()`.
+  Account password. Minimum **6 characters**. A password composed entirely of one repeated character (e.g. `"aaaaaa"`) must be at least **8 characters** to avoid being rejected as too weak.
 </ParamField>
 
 <ParamField body="tipo_documento" type="string" required>
-  Type of identity document. Accepted values: `CC`, `CE`, `PASAPORTE`.
+  Type of identity document. Accepted values: `CC`, `CE`, or `PASAPORTE`.
 </ParamField>
 
 <ParamField body="numero_documento" type="string" required>
-  Unique document number. Returns `409` if already registered.
+  Unique document number. Must contain **only digits**, between **5 and 15 digits** in length. Returns `409` if already registered.
 </ParamField>
 
 <ParamField body="fecha_nacimiento" type="string" required>
-  Date of birth in `YYYY-MM-DD` format.
+  Date of birth in `YYYY-MM-DD` format. Must be a valid past date; the calculated age must fall between **0 and 120 years**.
 </ParamField>
 
 <ParamField body="genero" type="string" required>
-  Gender of the user (e.g. `M`, `F`, or the value your front-end sends).
+  Gender of the user. Accepted values: `M` (Male), `F` (Female), or `O` (Other).
 </ParamField>
 
 ### Responses
@@ -81,8 +81,8 @@ Registers a new user account. The account is created with `activo = FALSE` and `
 | Status | Condition | Body |
 |--------|-----------|------|
 | `422` | Validation failed | `{ mensaje, errores[] }` |
-| `409` | Email already registered | `{ mensaje }` |
-| `409` | Document number already registered | `{ mensaje }` |
+| `409` | Email already registered | `{ mensaje: "Este correo ya está registrado." }` |
+| `409` | Document number already registered | `{ mensaje: "Este número de documento ya está registrado." }` |
 
 <Tip>
   If the verification email doesn't arrive within a few minutes, call **POST /auth/reenviar-codigo** with `tipo: "registro"` to request a fresh code.
@@ -107,7 +107,7 @@ curl -X POST https://your-api.railway.app/auth/register \
 
 ```json
 {
-  "mensaje": "Usuario registrado. Por favor verifica tu correo electrónico.",
+  "mensaje": "Cuenta creada. Revisa tu correo para obtener el código de verificación.",
   "email": "maria@example.com",
   "correoEnviado": true
 }
@@ -161,9 +161,9 @@ Authenticates a registered and verified user. Returns a signed **JWT** valid for
 
 | Status | Condition | Body |
 |--------|-----------|------|
-| `401` | Wrong email or password | `{ mensaje }` |
-| `403` | Email not yet verified | `{ mensaje, sinVerificar: true, email }` |
-| `403` | Account is inactive | `{ mensaje }` |
+| `401` | Wrong email or password | `{ mensaje: "Correo o contraseña incorrectos." }` |
+| `403` | Email not yet verified | `{ mensaje: "Debes verificar tu cuenta primero. Revisa tu correo.", sinVerificar: true, email }` |
+| `403` | Account is inactive | `{ mensaje: "Tu cuenta está desactivada. Contacta soporte." }` |
 
 ### Example
 
@@ -217,8 +217,8 @@ Verifies the 6-digit code sent during registration. On success the account is ac
 
 | Status | Condition | Body |
 |--------|-----------|------|
-| `400` | Code is wrong or not found | `{ mensaje }` |
-| `400` | Code has expired | `{ mensaje, expirado: true }` |
+| `400` | Code is wrong or not found | `{ mensaje: "Código incorrecto. Verifica e intenta de nuevo." }` |
+| `400` | Code has expired | `{ mensaje: "El código expiró. Solicita uno nuevo.", expirado: true }` |
 
 ### Example
 
@@ -246,8 +246,8 @@ Generates a new 6-digit code and sends it to the given email, replacing any exis
   The email address to which the new code should be sent.
 </ParamField>
 
-<ParamField body="tipo" type="string" required>
-  Purpose of the code. Must be `"registro"` or `"recuperacion"`.
+<ParamField body="tipo" type="string">
+  Purpose of the code. Must be `"registro"` or `"recuperacion"`. Defaults to `"registro"` if omitted.
 </ParamField>
 
 ### Responses
@@ -264,8 +264,8 @@ Generates a new 6-digit code and sends it to the given email, replacing any exis
 
 | Status | Condition | Body |
 |--------|-----------|------|
-| `404` | Email not found | `{ mensaje }` |
-| `400` | Account is already verified | `{ mensaje }` |
+| `404` | Email not found | `{ mensaje: "No existe una cuenta con este correo." }` |
+| `400` | Account is already verified | `{ mensaje: "Esta cuenta ya fue verificada." }` |
 
 ### Example
 
@@ -280,7 +280,7 @@ curl -X POST https://your-api.railway.app/auth/reenviar-codigo \
 
 ```json
 {
-  "mensaje": "Código reenviado correctamente.",
+  "mensaje": "Código reenviado. Revisa tu correo.",
   "correoEnviado": true
 }
 ```
@@ -289,7 +289,7 @@ curl -X POST https://your-api.railway.app/auth/reenviar-codigo \
 
 ## POST /auth/recuperar-password
 
-Initiates a password-recovery flow. If the supplied email belongs to a registered account, a 6-digit recovery code is sent. The response is intentionally identical whether the email exists or not, preventing account enumeration.
+Initiates a password-recovery flow. If the supplied email belongs to a registered active account, a 6-digit recovery code is sent. The response is intentionally identical whether the email exists or not, preventing account enumeration.
 
 **Authentication required:** No
 
@@ -355,9 +355,10 @@ Completes the password-recovery flow. Validates the 6-digit code from the recove
 
 | Status | Condition | Body |
 |--------|-----------|------|
-| `400` | Code is wrong | `{ mensaje }` |
-| `400` | Code has expired | `{ mensaje, expirado: true }` |
-| `400` | `nueva_password` shorter than 6 characters | `{ mensaje }` |
+| `400` | Missing fields | `{ mensaje: "Todos los campos son obligatorios." }` |
+| `400` | `nueva_password` shorter than 6 characters | `{ mensaje: "La contraseña debe tener mínimo 6 caracteres." }` |
+| `400` | Code is wrong or not found | `{ mensaje: "Código incorrecto o inválido." }` |
+| `400` | Code has expired | `{ mensaje: "El código expiró. Solicita uno nuevo.", expirado: true }` |
 
 ### Example
 

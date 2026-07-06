@@ -13,10 +13,15 @@ The Express backend reads these variables at startup. Missing required variables
 | Variable | Description | Example value | Required |
 |---|---|---|---|
 | `PORT` | TCP port the Express server listens on. Railway injects this automatically; default is `3000` locally. | `3000` | No |
-| `DATABASE_URL` | Full PostgreSQL connection string. Railway injects this automatically when you link a Postgres service. | `postgresql://user:pass@host:5432/melika_db` | **Yes** |
+| `DB_HOST` | Hostname of the PostgreSQL server. | `localhost` | **Yes** |
+| `DB_PORT` | Port the PostgreSQL server listens on. | `5432` | **Yes** |
+| `DB_NAME` | Name of the PostgreSQL database. | `melika_db` | **Yes** |
+| `DB_USER` | PostgreSQL user with access to `DB_NAME`. | `postgres` | **Yes** |
+| `DB_PASSWORD` | Password for `DB_USER`. | `s3cr3t` | **Yes** |
 | `JWT_SECRET` | Secret used to sign and verify JSON Web Tokens. Must be long and unpredictable. Rotating this value invalidates every active session. | `a8f3...` (64+ random chars) | **Yes** |
 | `FRONTEND_URL` | Allowed CORS origin for the production frontend. Must match the deployed client URL **exactly** — no trailing slash. | `https://melika-client.up.railway.app` | **Yes** |
-| `GMAIL_USER` | Gmail address that sends verification and notification emails. | `noreply@yourapp.com` | **Yes** |
+| `EMAIL_USER` | Gmail address that sends verification and notification emails via the Gmail API. | `noreply@yourapp.com` | **Yes** |
+| `EMAIL_FROM` | Display name and address shown in the `From` header. Defaults to `MELIKA Salud <EMAIL_USER>` when omitted. | `MELIKA Salud <noreply@yourapp.com>` | No |
 | `GMAIL_CLIENT_ID` | OAuth2 client ID obtained from Google Cloud Console. | `1234567890-abc.apps.googleusercontent.com` | **Yes** |
 | `GMAIL_CLIENT_SECRET` | OAuth2 client secret paired with `GMAIL_CLIENT_ID`. | `GOCSPX-...` | **Yes** |
 | `GMAIL_REFRESH_TOKEN` | Long-lived OAuth2 refresh token used to mint access tokens for the Gmail API. | `1//04...` | **Yes** |
@@ -35,7 +40,7 @@ Only variables prefixed with `VITE_` are embedded in the browser bundle. Never p
 
 ## Gmail OAuth2 setup
 
-MELIKA uses Gmail's OAuth2 flow instead of a plain SMTP password so that Google cannot block transactional email as "less secure app access". Follow these steps once to obtain the four Gmail-related variables.
+MELIKA uses Gmail's OAuth2 flow instead of a plain SMTP password so that Google cannot block transactional email as "less secure app access". Railway (and most cloud providers) also block outbound SMTP ports (25, 465, 587) at the network level — the Gmail API travels over HTTPS (port 443) and is never blocked. Follow these steps once to obtain the four Gmail-related variables.
 
 <Steps>
   <Step title="Create a Google Cloud project">
@@ -48,7 +53,7 @@ MELIKA uses Gmail's OAuth2 flow instead of a plain SMTP password so that Google 
     Go to **APIs & Services → Credentials → Create Credentials → OAuth client ID**. Choose **Web application** as the application type. Add `https://developers.google.com/oauthplayground` as an authorised redirect URI, then click **Create**. Copy the **Client ID** → `GMAIL_CLIENT_ID` and **Client Secret** → `GMAIL_CLIENT_SECRET`.
   </Step>
   <Step title="Obtain a refresh token">
-    Open [OAuth 2.0 Playground](https://developers.google.com/oauthplayground). Click the gear icon (**OAuth2 configuration**), enable **Use your own OAuth credentials**, and paste your Client ID and Client Secret. In **Step 1**, select `https://mail.google.com/` from the Gmail API scopes and click **Authorise APIs**. Sign in with `GMAIL_USER`. In **Step 2**, click **Exchange authorization code for tokens**. Copy the **Refresh token** → `GMAIL_REFRESH_TOKEN`.
+    Open [OAuth 2.0 Playground](https://developers.google.com/oauthplayground). Click the gear icon (**OAuth2 configuration**), enable **Use your own OAuth credentials**, and paste your Client ID and Client Secret. In **Step 1**, select `https://mail.google.com/` from the Gmail API scopes and click **Authorise APIs**. Sign in with the `EMAIL_USER` address. In **Step 2**, click **Exchange authorization code for tokens**. Copy the **Refresh token** → `GMAIL_REFRESH_TOKEN`.
   </Step>
 </Steps>
 
@@ -92,11 +97,16 @@ node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"
 ```bash server/.env
 # Server — never commit this file
 PORT=3000
-DATABASE_URL=postgresql://postgres:password@localhost:5432/melika_db
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=melika_db
+DB_USER=postgres
+DB_PASSWORD=replace_with_db_password
 JWT_SECRET=replace_with_64_plus_random_hex_chars
 FRONTEND_URL=http://localhost:5173
 
-GMAIL_USER=noreply@yourapp.com
+EMAIL_USER=noreply@yourapp.com
+EMAIL_FROM=MELIKA Salud <noreply@yourapp.com>
 GMAIL_CLIENT_ID=1234567890-abc.apps.googleusercontent.com
 GMAIL_CLIENT_SECRET=GOCSPX-xxxxxxxxxxxxxxxxxxxxxxxx
 GMAIL_REFRESH_TOKEN=1//04xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
@@ -118,7 +128,7 @@ MELIKA stores **datos sensibles de salud** (clinical histories, diagnoses, presc
 
 <Info>
 - Obtain explicit, informed consent from patients before collecting health data.
-- Store `DATABASE_URL` and `JWT_SECRET` only in secure secret stores — never in source code or public repositories.
+- Store all database credentials and `JWT_SECRET` only in secure secret stores — never in source code or public repositories.
 - Restrict database access to the minimum set of users and services that require it.
 - Maintain an audit log of access to clinical histories (MELIKA's `logs_citas` table partially satisfies this requirement).
 - Appoint a **Responsable del Tratamiento** and publish a **Política de Tratamiento de Datos Personales** accessible to all users.

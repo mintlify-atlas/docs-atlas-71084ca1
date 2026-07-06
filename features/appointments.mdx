@@ -1,10 +1,10 @@
 ---
-title: "Appointment Booking and Lifecycle Management"
+title: "Appointment Booking, States, and Cancellation Rules"
 sidebarTitle: "Appointments"
-description: "How MELIKA handles the full appointment lifecycle — from browsing availability to booking, tracking, canceling, and viewing appointments on a FullCalendar calendar view."
+description: "MELIKA appointment lifecycle: booking slots, FullCalendar rendering, state tracking, cancellation rules, and database-level double-booking prevention."
 ---
 
-MELIKA's appointment system covers the full journey from initial booking through completion or cancellation. Every appointment is anchored to a 40-minute time slot (`franja_horaria`), a specific doctor, and a specialty — ensuring consistent scheduling across both in-person and teleconsultation modalities. The platform enforces concurrency-safe booking, automatic slot liberation on cancellation, and real-time calendar rendering for both patients and medical staff.
+MELIKA's appointment system covers the full journey from initial booking through completion or cancellation. Every appointment is anchored to a time slot (`franja_horaria`), a specific doctor, and a specialty — ensuring consistent scheduling across both in-person and teleconsultation modalities. The platform enforces concurrency-safe booking, automatic slot liberation on cancellation, and real-time calendar rendering for patients.
 
 ## Appointment Lifecycle
 
@@ -13,13 +13,21 @@ Each appointment moves through a set of well-defined states. The flow begins at 
 | State | Color | Hex | Meaning |
 |---|---|---|---|
 | `pendiente` | Amber | `#B45309` | Appointment has been booked and is awaiting the scheduled date |
-| `completada` | Green | `#1A7A52` | The appointment was attended and the doctor has managed it |
-| `cancelada` | — | — | The appointment was explicitly cancelled before taking place |
+| `completada` | Green | `#1A7A52` | The appointment was attended and the doctor has filed the clinical record |
 | `no_asistio` | Gray | `#6B7280` | The patient did not show up for the scheduled appointment |
+| `cancelada` | — | — | Explicitly cancelled before taking place; excluded from calendar events |
 
 <Note>
-  State colors map directly to the `backgroundColor` and `borderColor` fields returned by the `GET /citas/calendario` endpoint, so the FullCalendar UI reflects states without any additional client-side mapping.
+  `pendiente`, `completada`, and `no_asistio` map directly to `backgroundColor`/`borderColor` values returned by `GET /citas/calendario`. Cancelled appointments are **excluded** from the calendar response (`estado != 'cancelada'`) and only appear in the list view.
 </Note>
+
+The server-side color map for calendar events is:
+
+| State | `backgroundColor` | `borderColor` |
+|---|---|---|
+| `pendiente` | `#B45309` | `#92400E` |
+| `completada` | `#1A7A52` | `#145C3E` |
+| `no_asistio` | `#6B7280` | `#4B5563` |
 
 ## Consultation Types
 
@@ -47,14 +55,14 @@ When booking, patients choose between two consultation modalities via the `tipo_
     Returns an array of specialty objects including `id`, `nombre`, `descripcion`, `precio_base`, and `imagen_url`.
   </Step>
   <Step title="Pick a Doctor">
-    List all doctors for a chosen specialty. The response includes profile details such as `foto_url`, `tarifa`, `calificacion`, `acepta_teleconsulta`, `acepta_presencial`, `biografia`, and `anos_experiencia`.
+    List all active doctors for a chosen specialty. The response includes profile details such as `foto_url`, `tarifa`, `calificacion`, `acepta_teleconsulta`, `acepta_presencial`, `biografia`, and `anos_experiencia`.
 
     ```http
     GET /especialidades/:id/medicos
     ```
   </Step>
   <Step title="Check Slot Availability">
-    Query available `franjas_horarias` for a specific doctor on a given date. Each franja is 40 minutes long.
+    Query available `franjas_horarias` for a specific doctor on a given date.
 
     ```http
     GET /especialidades/disponibilidad?medico_id=3&fecha=2025-08-15
@@ -67,7 +75,7 @@ When booking, patients choose between two consultation modalities via the `tipo_
     ```
   </Step>
   <Step title="Book the Appointment">
-    Submit the booking with the required fields. `tipo_consulta` and `motivo` are optional.
+    Submit the booking with the required fields. `tipo_consulta` defaults to `"presencial"` if omitted; `motivo` is fully optional.
 
     ```http
     POST /citas
@@ -84,7 +92,7 @@ When booking, patients choose between two consultation modalities via the `tipo_
     }
     ```
 
-    On success, the full `cita` object is returned including the assigned slot details and initial state `pendiente`.
+    On success (`201 Created`), the full `cita` object is returned with initial state `pendiente`.
   </Step>
 </Steps>
 
@@ -96,11 +104,11 @@ When booking, patients choose between two consultation modalities via the `tipo_
     - `id_especialidad` — ID of the specialty
     - `id_franja` — ID of the time slot from `franjas_horarias`
     - `fecha` — Date of appointment (`YYYY-MM-DD`)
-    - `hora_inicio` — Start time of the slot (`HH:MM`)
+    - `hora_inicio` — Start time of the slot (`HH:MM:SS`)
   </Card>
   <Card title="Optional Fields" icon="circle-info">
     - `tipo_consulta` — `"presencial"` or `"teleconsulta"` (defaults to `"presencial"`)
-    - `motivo` — Free-text reason for the visit
+    - `motivo` — Free-text reason for the visit (max 300 chars in the UI)
   </Card>
 </CardGroup>
 
@@ -108,7 +116,7 @@ When booking, patients choose between two consultation modalities via the `tipo_
 
 <Tabs>
   <Tab title="Appointment List">
-    Returns all appointments for the authenticated patient, enriched with the doctor's full name, specialty name, and the slot's `hora_fin` from the `franjas_horarias` table.
+    Returns all appointments for the authenticated patient, ordered by date descending. The response includes the doctor's name fields separately, the specialty name, and `hora_fin` joined from `franjas_horarias`.
 
     ```http
     GET /citas/mis-citas
@@ -120,36 +128,46 @@ When booking, patients choose between two consultation modalities via the `tipo_
     {
       "id": 42,
       "fecha": "2025-08-15",
-      "hora_inicio": "09:00",
-      "hora_fin": "09:40",
+      "hora_inicio": "09:00:00",
+      "hora_fin": "09:40:00",
       "estado": "pendiente",
       "tipo_consulta": "presencial",
       "motivo": "Revisión anual de tensión arterial",
-      "medico": "Dr. Andrés Ramírez",
+      "tarifa_cobrada": "120.00",
+      "razon_cancelacion": null,
+      "created_at": "2025-07-20T14:32:00.000Z",
+      "medico_nombre": "Andrés",
+      "medico_apellido": "Ramírez",
       "especialidad": "Cardiología"
     }
     ```
   </Tab>
   <Tab title="Calendar View">
-    Returns appointment data shaped as FullCalendar event objects. Each event includes `backgroundColor` and `borderColor` already set to the state's corresponding color code, so no client-side transformation is needed.
+    Returns appointment data shaped as FullCalendar event objects. Only non-cancelled appointments are included. Each event's `backgroundColor` and `borderColor` are pre-set to the state's color — no client-side mapping is needed.
 
     ```http
-    GET /citas/calendario
+    GET /citas/calendario?inicio=2025-08-01&fin=2025-08-31
     ```
+
+    The `inicio` and `fin` query parameters are optional. When omitted, the server falls back to the current calendar month automatically.
 
     Example response item:
 
     ```json
     {
-      "id": 42,
-      "title": "Cardiología — Dr. Andrés Ramírez",
+      "id": "42",
+      "title": "Pendiente · Cardiología",
       "start": "2025-08-15T09:00:00",
-      "end": "2025-08-15T09:40:00",
       "backgroundColor": "#B45309",
-      "borderColor": "#B45309",
+      "borderColor": "#92400E",
+      "textColor": "#fff",
       "extendedProps": {
         "estado": "pendiente",
-        "tipo_consulta": "presencial"
+        "tipo_consulta": "presencial",
+        "medico_nombre": "Andrés Ramírez",
+        "especialidad": "Cardiología",
+        "motivo": "Revisión anual de tensión arterial",
+        "tarifa": "120.00"
       }
     }
     ```
@@ -160,7 +178,7 @@ When booking, patients choose between two consultation modalities via the `tipo_
 
 ## Cancellation Rules
 
-To cancel a `pendiente` appointment, send a `PATCH` request with a mandatory cancellation reason. Cancelling a `completada` appointment is not permitted.
+To cancel a `pendiente` appointment, send a `PATCH` request with a mandatory cancellation reason. Attempting to cancel a `completada` appointment or one already in `cancelada` state returns a `400` error.
 
 ```http
 PATCH /citas/:id
@@ -172,14 +190,14 @@ Content-Type: application/json
 ```
 
 <Warning>
-  The `razon_cancelacion` field is **required** in the request body. Omitting it will result in a validation error and the appointment will not be cancelled.
+  The `razon_cancelacion` field is **required**. An empty or missing value returns `400 BAD_REQUEST` and the appointment is not cancelled.
 </Warning>
 
 When an appointment is successfully cancelled, the associated `franja_horaria` is **automatically freed** via a database trigger, making it immediately available for other patients to book.
 
 ## Deleting an Appointment
 
-Only appointments with `estado = 'cancelada'` may be permanently deleted. Attempting to delete an appointment in any other state will return an error.
+Only appointments with `estado = 'cancelada'` may be permanently deleted by the owning patient. Attempting to delete an appointment in any other state returns a `400` error.
 
 ```http
 DELETE /citas/:id
@@ -191,17 +209,17 @@ DELETE /citas/:id
 
 ## Concurrency Protection
 
-MELIKA uses database-level concurrency control to prevent double-booking. If two patients attempt to book the same slot at the same time, only one request will succeed. The other will receive a structured error response.
+MELIKA uses database-level concurrency control to prevent double-booking. If two patients attempt to book the same slot simultaneously, only one request succeeds. The other receives a structured error response.
 
-| Error Code | Name | Description |
+| Error Code | `error` value | Description |
 |---|---|---|
 | `45002` | `CONCURRENCY_CONFLICT` | Another user booked the same slot between your availability check and your booking request. Prompt the user to select a different slot. |
 | `45001` | `INVALID_SLOT` | The selected `franja_horaria` does not exist or is not available for the requested doctor and date combination. |
 
 ```json
 {
-  "code": "CONCURRENCY_CONFLICT",
-  "message": "El horario seleccionado ya fue reservado por otro usuario. Por favor, elige otro turno disponible."
+  "error": "CONCURRENCY_CONFLICT",
+  "mensaje": "Esta franja ya fue reservada simultáneamente. Por favor elige otro horario."
 }
 ```
 

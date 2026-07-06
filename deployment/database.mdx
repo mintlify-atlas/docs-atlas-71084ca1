@@ -21,7 +21,7 @@ MELIKA's persistence layer is a PostgreSQL database whose full schema — tables
 
 <Steps>
   <Step title="Create the database">
-    Create a new, empty database named `melika_db` (or any name you prefer — just update `DATABASE_URL` accordingly):
+    Create a new, empty database named `melika_db` (or any name you prefer — just update `DB_NAME` accordingly):
 
     ```bash
     createdb melika_db
@@ -58,7 +58,7 @@ MELIKA's persistence layer is a PostgreSQL database whose full schema — tables
     \dt
     ```
 
-    You should see all ten tables listed. Exit with `\q`.
+    You should see all tables listed. Exit with `\q`.
   </Step>
 </Steps>
 
@@ -74,14 +74,17 @@ The schema models a complete digital health workflow — from user authenticatio
 | `especialidades` | Medical specialities catalogue (e.g. Cardiología, Pediatría). Referenced by `medicos`. |
 | `medicamentos` | Medication catalogue used when composing prescriptions inside clinical histories. |
 | `medicos` | Doctor profiles linked to a `usuarios` record; stores specialty, biography, rating, and schedule metadata. |
-| `franjas_horarias` | Individual bookable time slots belonging to a doctor, with an `disponible` flag managed by triggers. |
+| `franjas_horarias` | Individual bookable time slots belonging to a doctor, with a `disponible` flag managed by triggers. |
 | `citas` | Appointment records linking a patient, a doctor, and a `franja_horaria`. Subject to audit triggers. |
 | `historias_clinicas` | Clinical history entries attached to a `cita`; stores diagnosis, treatment, and prescribed medications. |
 | `logs_citas` | Immutable audit log populated automatically by the `fn_auditar_citas` trigger on every change to `citas`. |
+| `documentos_clinicos` | Clinical documents (medical histories, prescriptions, lab orders, external uploads) attached to a patient or clinical history. |
+| `recetas_medicas` | Individual prescription lines (medication, dose, frequency, duration) linked to a clinical history. |
+| `ordenes_examenes` | Lab and imaging orders issued within a clinical history. |
 
 ## Database triggers
 
-MELIKA offloads four critical business rules to PostgreSQL triggers, guaranteeing correctness regardless of which application layer (API, admin script, direct SQL) performs the write.
+MELIKA offloads three critical business rules to PostgreSQL triggers, guaranteeing correctness regardless of which application layer (API, admin script, direct SQL) performs the write.
 
 <Accordion title="fn_auditar_citas — audit trail for appointments">
   Fires **AFTER INSERT, UPDATE, or DELETE** on the `citas` table. Every mutation is recorded in `logs_citas` with the operation type, a timestamp, and a snapshot of the affected row. Because `logs_citas` is written inside the same transaction, the audit record is guaranteed to exist if and only if the original write succeeded.
@@ -90,47 +93,47 @@ MELIKA offloads four critical business rules to PostgreSQL triggers, guaranteein
 
   ```sql
   -- Trigger definition (excerpt from melika_db.sql)
-  CREATE TRIGGER trg_auditar_citas
+  CREATE TRIGGER trg_auditoria_citas
     AFTER INSERT OR UPDATE OR DELETE ON citas
     FOR EACH ROW EXECUTE FUNCTION fn_auditar_citas();
   ```
 </Accordion>
 
-<Accordion title="fn_validar_disponibilidad_franja — concurrency-safe slot booking">
+<Accordion title="fn_verificar_disponibilidad_critica — concurrency-safe slot booking">
   Fires **BEFORE INSERT** on `citas`. It checks whether the target `franja_horaria` is still marked `disponible = TRUE`. If the slot has already been taken, the function raises a custom PostgreSQL exception:
 
-  - **`45001`** — slot does not exist or belongs to a different doctor.
-  - **`45002`** — slot is already booked (`disponible = FALSE`).
+  - **`45001`** — the specified time slot does not exist in the records.
+  - **`45002`** — the slot is already booked (`disponible = FALSE`).
 
   The application layer catches these specific SQLSTATE codes and returns a user-friendly conflict response instead of a generic 500 error. This prevents double-booking even under concurrent requests without requiring application-level locking.
 
   ```sql
   -- Custom exceptions raised by this function
-  RAISE EXCEPTION 'La franja horaria no existe o no pertenece al médico'
+  RAISE EXCEPTION 'ERR_FRANJA_INEXISTENTE: La franja horaria especificada no existe en los registros.'
     USING ERRCODE = '45001';
 
-  RAISE EXCEPTION 'La franja horaria no está disponible'
+  RAISE EXCEPTION 'ERR_FRANJA_OCUPADA: Conflicto de concurrencia. La franja horaria ya ha sido reservada.'
     USING ERRCODE = '45002';
   ```
 </Accordion>
 
-<Accordion title="fn_liberar_franja_cancelada — automatic slot release on cancellation">
-  Fires **AFTER UPDATE** on `citas` when the `estado` column transitions to `'cancelada'`. It automatically sets `franjas_horarias.disponible = TRUE` for the corresponding slot, making the time window bookable again without any additional API call.
+<Accordion title="fn_sincronizar_franja_horaria — automatic slot state management">
+  Fires **AFTER INSERT, UPDATE, or DELETE** on `citas` and keeps the `franjas_horarias.disponible` flag in sync with actual appointment state:
 
-  This keeps the `disponible` flag — the source of truth for scheduling — always consistent with actual appointment state, even if a cancellation is performed directly in the database.
-</Accordion>
+  - **INSERT** — marks the booked slot as `disponible = FALSE` immediately.
+  - **UPDATE** (state transitions to `'cancelada'`) — sets `disponible = TRUE`, making the time window bookable again without any additional API call.
+  - **DELETE** — releases the slot by setting `disponible = TRUE`.
 
-<Accordion title="fn_actualizar_calificacion_medico — rolling doctor rating">
-  Fires **AFTER INSERT** on `historias_clinicas`. It recalculates the average `calificacion` (rating) for the associated doctor by aggregating all clinical history ratings and writes the result back to `medicos.calificacion`. The doctor's public rating is therefore always in sync with patient feedback without requiring a scheduled job or manual recalculation.
+  This keeps the `disponible` flag — the source of truth for scheduling — always consistent with actual appointment state, even if a change is performed directly in the database.
 </Accordion>
 
 ## Creating the first admin user
 
-The database starts empty — there are no users until you run the admin-creation script. This script inserts a fully verified admin account directly, bypassing the email-verification flow.
+The database starts empty — there are no users until you run the admin-creation script. This script inserts a fully verified admin account directly into the `usuarios` table, bypassing the email-verification flow. The admin email and an initial password are hardcoded in the script; you should change the password immediately after the first login.
 
 <Steps>
-  <Step title="Set DATABASE_URL">
-    Make sure `DATABASE_URL` is set in `server/.env` (local) or in the Railway service environment (production) before running the script.
+  <Step title="Set database environment variables">
+    Make sure all five `DB_*` variables (`DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`) are set in `server/.env` (local) or in the Railway service environment (production) before running the script.
   </Step>
   <Step title="Run the script">
     From the repository root:
@@ -139,29 +142,33 @@ The database starts empty — there are no users until you run the admin-creatio
     node server/scripts/crearAdmin.js
     ```
 
-    The script will prompt for a username, email, and password, then insert the record.
+    The script does not prompt for input — it uses the hardcoded credentials defined inside `crearAdmin.js`. If an admin with the same email already exists, the script exits without creating a duplicate. On success it prints the new account's email, role, and the initial plaintext password to the console.
   </Step>
-  <Step title="Verify login">
-    Start the server and log in with the admin credentials through the MELIKA frontend or via the API to confirm the account works correctly.
+  <Step title="Verify login and change the password">
+    Start the server and log in with the admin credentials through the MELIKA frontend or via the API to confirm the account works correctly. **Change the default password immediately after the first login.**
   </Step>
 </Steps>
 
 <Note>
-On Railway, run this script using the **Railway shell** for the server service after the schema has been applied. Open the service in the Railway dashboard, click **Shell**, and execute `node server/scripts/crearAdmin.js` in the remote environment.
+On Railway, run this script using the **Railway shell** for the server service after the schema has been applied. Open the service in the Railway dashboard, click **Shell**, and execute `node scripts/crearAdmin.js` in the remote environment (the shell opens at the service root directory, `/server`).
 </Note>
 
 ## Railway PostgreSQL
 
-When you add a PostgreSQL service to your Railway project and link it to the server service, Railway automatically injects `DATABASE_URL` as an environment variable in the format:
+When you add a PostgreSQL service to your Railway project and link it to the server service, Railway exposes the following individual connection variables, which map directly to what `server/src/config/db.js` expects:
 
 ```
-postgresql://postgres:<password>@<host>.railway.internal:5432/railway
+PGHOST      → set as DB_HOST
+PGPORT      → set as DB_PORT
+PGDATABASE  → set as DB_NAME
+PGUSER      → set as DB_USER
+PGPASSWORD  → set as DB_PASSWORD
 ```
 
-You do not need to set `DATABASE_URL` manually in Railway. The `pg` client in the Express backend reads this variable directly at connection time.
+Railway does **not** automatically set the `DB_*` variable names that MELIKA uses — you must either copy the values from the Railway Postgres service's **Connect** tab and add them as `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD` in the server service variables, or use Railway's variable references to wire them through.
 
 <Tip>
-Railway also exposes `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, and `PGDATABASE` as individual variables if you need them for `psql` CLI access from the Railway shell.
+In the Railway dashboard, use **variable references** to avoid duplicating secrets. For example, set `DB_HOST` to `${{Postgres.PGHOST}}` and Railway will substitute the real value at runtime.
 </Tip>
 
 ## Backup recommendations

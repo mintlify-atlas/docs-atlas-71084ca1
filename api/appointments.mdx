@@ -1,10 +1,10 @@
 ---
-title: "Appointments API — Booking, Calendar, and Cancellation"
+title: "Appointments API — Booking, Calendar & Cancellation"
 sidebarTitle: "Appointments"
-description: "REST endpoints for the full appointment lifecycle in MELIKA — create, list, calendar view, cancel, and delete appointments with real-time slot concurrency protection."
+description: "REST endpoints for the MELIKA appointment lifecycle: create, list, calendar view, cancel, and delete bookings with concurrency-safe slot protection."
 ---
 
-The Appointments API powers the complete booking lifecycle in MELIKA. Patients can reserve time slots with a specific doctor and specialty, view their upcoming and past appointments, render a FullCalendar-compatible calendar, cancel a booking with a stated reason, and permanently delete cancelled records. Every route is protected by JWT authentication, and the database layer enforces slot availability with concurrency-safe triggers that prevent double-booking even under simultaneous requests.
+The Appointments API powers the complete booking lifecycle in MELIKA. Patients can reserve time slots with a specific doctor and specialty, view their upcoming and past appointments, render a FullCalendar-compatible event feed, cancel a booking with a stated reason, and permanently delete cancelled records. Every route is protected by JWT authentication, and the database layer enforces slot availability with concurrency-safe triggers that prevent double-booking even under simultaneous requests.
 
 ---
 
@@ -58,7 +58,7 @@ Books a new appointment for the authenticated patient. The server looks up the d
 </ParamField>
 
 <ParamField body="id_franja" type="integer" required>
-  Identifier of the time slot (`franja_horaria`) to reserve. The slot must exist and be currently available; if it does not exist or is already taken a `400 INVALID_SLOT` error is returned.
+  Identifier of the time slot (`franja_horaria`) to reserve. The slot must exist and be currently available. If it does not exist the DB trigger raises PgSQL error `45001` (`INVALID_SLOT`); if it is already taken by a concurrent booking, error `45002` (`CONCURRENCY_CONFLICT`) is raised.
 </ParamField>
 
 <ParamField body="fecha" type="string" required>
@@ -106,7 +106,7 @@ Books a new appointment for the authenticated patient. The server looks up the d
 | HTTP Status | Code | Cause |
 |---|---|---|
 | `400` | `BAD_REQUEST` | One or more required body fields are missing. |
-| `400` | `INVALID_SLOT` | The `id_franja` does not exist or is no longer available (PgSQL `45001`). |
+| `400` | `INVALID_SLOT` | The `id_franja` does not exist (PgSQL `45001`). |
 | `404` | `NOT_FOUND` | Doctor with `id_medico` not found or marked inactive. |
 | `409` | `CONCURRENCY_CONFLICT` | Another patient booked the same slot simultaneously (PgSQL `45002`). |
 | `401` | `UNAUTHORIZED` | JWT missing or invalid. |
@@ -164,15 +164,14 @@ No query or path parameters required. The patient is identified from the JWT aut
 
 #### Response — `200 OK`
 
-An array of appointment objects. Each element contains:
+An array of appointment objects, ordered by `fecha DESC`, `hora_inicio DESC`.
 
 <ResponseField name="[]" type="array of objects">
-  Ordered by `fecha DESC`, `hora_inicio DESC`.
   <Expandable title="Appointment object fields">
     <ResponseField name="id" type="integer">Appointment identifier.</ResponseField>
-    <ResponseField name="fecha" type="string">Date in `YYYY-MM-DD` format (formatted via SQL `TO_CHAR`).</ResponseField>
-    <ResponseField name="hora_inicio" type="string">Start time from the reserved `franja_horaria`.</ResponseField>
-    <ResponseField name="hora_fin" type="string">End time from the reserved `franja_horaria`.</ResponseField>
+    <ResponseField name="fecha" type="string">Date in `YYYY-MM-DD` format (formatted via SQL `TO_CHAR` to avoid timezone drift).</ResponseField>
+    <ResponseField name="hora_inicio" type="string">Start time (`HH:MM`).</ResponseField>
+    <ResponseField name="hora_fin" type="string">End time resolved from the linked `franja_horaria` record (`HH:MM`).</ResponseField>
     <ResponseField name="estado" type="string">Current appointment state: `pendiente`, `completada`, `no_asistio`, or `cancelada`.</ResponseField>
     <ResponseField name="tipo_consulta" type="string">`presencial` or `teleconsulta`.</ResponseField>
     <ResponseField name="motivo" type="string">Visit reason, if recorded.</ResponseField>
@@ -180,7 +179,7 @@ An array of appointment objects. Each element contains:
     <ResponseField name="razon_cancelacion" type="string">Cancellation reason, populated only when `estado = 'cancelada'`.</ResponseField>
     <ResponseField name="created_at" type="string">ISO 8601 creation timestamp.</ResponseField>
     <ResponseField name="medico_nombre" type="string">Doctor's first name.</ResponseField>
-    <ResponseField name="medico_apellido" type="string">Doctor's last name.</ResponseField>
+    <ResponseField name="medico_apellido" type="string">Doctor's first surname.</ResponseField>
     <ResponseField name="especialidad" type="string">Specialty name.</ResponseField>
   </Expandable>
 </ResponseField>
@@ -205,7 +204,7 @@ curl -X GET http://localhost:3000/citas/mis-citas \
     "id": 201,
     "fecha": "2025-09-15",
     "hora_inicio": "09:00",
-    "hora_fin": "09:30",
+    "hora_fin": "09:40",
     "estado": "pendiente",
     "tipo_consulta": "teleconsulta",
     "motivo": "Revisión de resultados de laboratorio",
@@ -220,7 +219,7 @@ curl -X GET http://localhost:3000/citas/mis-citas \
     "id": 198,
     "fecha": "2025-08-20",
     "hora_inicio": "11:00",
-    "hora_fin": "11:30",
+    "hora_fin": "11:40",
     "estado": "cancelada",
     "tipo_consulta": "presencial",
     "motivo": null,
@@ -246,39 +245,46 @@ Returns a list of appointment events formatted for direct consumption by [FullCa
 #### Query Parameters
 
 <ParamField query="inicio" type="string">
-  Start of the date range in `YYYY-MM-DD` format. Defaults to the first day of the current month if omitted.
+  Start of the date range in `YYYY-MM-DD` format. Also accepted as `start` (FullCalendar's default param name). Defaults to the first day of the current month if omitted.
 </ParamField>
 
 <ParamField query="fin" type="string">
-  End of the date range in `YYYY-MM-DD` format. Defaults to the last day of the current month if omitted.
+  End of the date range in `YYYY-MM-DD` format. Also accepted as `end`. Defaults to the last day of the current month if omitted.
 </ParamField>
 
 #### Response — `200 OK`
 
-An array of FullCalendar-compatible event objects:
+An array of FullCalendar-compatible event objects. `cancelada` appointments are never included.
 
 <ResponseField name="[]" type="array of objects">
   <Expandable title="Event object fields">
-    <ResponseField name="id" type="integer">Appointment identifier, usable as FullCalendar's event `id`.</ResponseField>
-    <ResponseField name="title" type="string">Display label shown on the calendar tile (e.g., doctor name + specialty).</ResponseField>
-    <ResponseField name="start" type="string">ISO 8601 datetime string representing the appointment start (`fecha` + `hora_inicio`).</ResponseField>
+    <ResponseField name="id" type="string">Appointment identifier cast to string (e.g. `"201"`) — FullCalendar expects a string event ID.</ResponseField>
+    <ResponseField name="title" type="string">Display label shown on the calendar tile, formatted as `"{Estado} · {Especialidad}"` (e.g. `"Pendiente · Medicina Interna"`).</ResponseField>
+    <ResponseField name="start" type="string">
+      Event start datetime assembled by concatenating `fecha_str` and `hora_inicio` with a `T` separator: `"YYYY-MM-DDTHH:MM"`. No seconds component — `hora_inicio` is stored as `HH:MM`.
+    </ResponseField>
     <ResponseField name="backgroundColor" type="string">
-      Hex color driven by appointment state:
+      Hex fill color driven by appointment state:
       - `pendiente` → `#B45309` (amber)
       - `completada` → `#1A7A52` (green)
       - `no_asistio` → `#6B7280` (gray)
     </ResponseField>
-    <ResponseField name="borderColor" type="string">Same value as `backgroundColor` for visual consistency.</ResponseField>
+    <ResponseField name="borderColor" type="string">
+      Distinct darker border color per state:
+      - `pendiente` → `#92400E`
+      - `completada` → `#145C3E`
+      - `no_asistio` → `#4B5563`
+    </ResponseField>
     <ResponseField name="textColor" type="string">Always `"#fff"` (white) for legibility on all state colors.</ResponseField>
     <ResponseField name="extendedProps" type="object">
       Additional metadata accessible in FullCalendar event handlers.
       <Expandable title="extendedProps fields">
         <ResponseField name="estado" type="string">Appointment state: `pendiente`, `completada`, or `no_asistio`.</ResponseField>
         <ResponseField name="tipo_consulta" type="string">`presencial` or `teleconsulta`.</ResponseField>
-        <ResponseField name="medico_nombre" type="string">Full doctor name.</ResponseField>
+        <ResponseField name="medico_nombre" type="string">Doctor's full name (`nombre + primer_apellido`).</ResponseField>
         <ResponseField name="especialidad" type="string">Specialty name.</ResponseField>
         <ResponseField name="motivo" type="string">Visit reason, if provided.</ResponseField>
-        <ResponseField name="tarifa" type="number">Consultation fee.</ResponseField>
+        <ResponseField name="tarifa" type="number">Consultation fee charged.</ResponseField>
       </Expandable>
     </ResponseField>
   </Expandable>
@@ -305,11 +311,11 @@ curl -X GET "http://localhost:3000/citas/calendario?inicio=2025-09-01&fin=2025-0
 ```json Response 200
 [
   {
-    "id": 201,
-    "title": "Dr. Carlos Mendoza — Medicina Interna",
-    "start": "2025-09-15T09:00:00",
+    "id": "201",
+    "title": "Pendiente · Medicina Interna",
+    "start": "2025-09-15T09:00",
     "backgroundColor": "#B45309",
-    "borderColor": "#B45309",
+    "borderColor": "#92400E",
     "textColor": "#fff",
     "extendedProps": {
       "estado": "pendiente",
@@ -328,10 +334,10 @@ curl -X GET "http://localhost:3000/citas/calendario?inicio=2025-09-01&fin=2025-0
 
 ### <span style={{color:'#d97706', fontWeight:700}}>PATCH</span> `/citas/:id` — Cancel Appointment
 
-Cancels a `pendiente` appointment owned by the authenticated patient. A `razon_cancelacion` is required. The cancellation atomically updates the appointment state and — via a **database trigger** — automatically sets the corresponding `franja_horaria.disponible = TRUE`, making the slot immediately available for other patients without any additional API call.
+Cancels a `pendiente` appointment owned by the authenticated patient. A `razon_cancelacion` is required in the request body. The cancellation atomically updates the appointment state and — via a **database trigger** — automatically sets the corresponding `franja_horaria.disponible = TRUE`, making the slot immediately available for other patients without any additional API call.
 
 <Note>
-  **Automatic Slot Liberation:** The database trigger that releases the time slot fires on every `UPDATE` that sets `estado = 'cancelada'`. This means the slot is freed in the same transaction as the cancellation — there is no race window where the slot appears taken after a successful cancellation response.
+  **Automatic Slot Liberation:** The database trigger that releases the time slot fires on every `UPDATE` that sets `estado = 'cancelada'`. The slot is freed in the same transaction as the cancellation — there is no race window where the slot appears taken after a successful cancellation response.
 </Note>
 
 **Authentication:** `Authorization: Bearer <token>` — required
@@ -345,21 +351,21 @@ Cancels a `pendiente` appointment owned by the authenticated patient. A `razon_c
 #### Request Body
 
 <ParamField body="razon_cancelacion" type="string" required>
-  The patient's stated reason for cancelling. Cannot be blank.
+  The patient's stated reason for cancelling. Must be a non-blank string in the request body (not a query parameter).
 </ParamField>
 
 #### Response — `200 OK`
 
 <ResponseField name="mensaje" type="string">
-  Confirmation message.
+  Confirmation message: `"Cita cancelada. La franja horaria fue liberada automáticamente por la base de datos."`
 </ResponseField>
 
 <ResponseField name="cita" type="object">
-  The updated appointment record reflecting `estado = 'cancelada'` and the recorded `razon_cancelacion`.
+  The full updated appointment record reflecting `estado = 'cancelada'` and the recorded `razon_cancelacion`.
   <Expandable title="cita fields">
     <ResponseField name="id" type="integer">Appointment identifier.</ResponseField>
     <ResponseField name="estado" type="string">Updated state: `"cancelada"`.</ResponseField>
-    <ResponseField name="razon_cancelacion" type="string">The reason provided in the request.</ResponseField>
+    <ResponseField name="razon_cancelacion" type="string">The trimmed reason provided in the request.</ResponseField>
     <ResponseField name="fecha" type="string">Appointment date.</ResponseField>
     <ResponseField name="hora_inicio" type="string">Appointment start time.</ResponseField>
     <ResponseField name="id_medico" type="integer">Doctor identifier.</ResponseField>
@@ -371,7 +377,7 @@ Cancels a `pendiente` appointment owned by the authenticated patient. A `razon_c
 
 | HTTP Status | Code | Cause |
 |---|---|---|
-| `400` | `BAD_REQUEST` | `razon_cancelacion` missing from request body. |
+| `400` | `BAD_REQUEST` | `razon_cancelacion` missing or blank in request body. |
 | `400` | `BAD_REQUEST` | Appointment is already `cancelada`. |
 | `400` | `BAD_REQUEST` | Appointment is `completada` and cannot be cancelled. |
 | `403` | `FORBIDDEN` | The appointment belongs to a different patient. |
@@ -392,7 +398,7 @@ curl -X PATCH http://localhost:3000/citas/201 \
 
 ```json Response 200
 {
-  "mensaje": "Cita cancelada correctamente.",
+  "mensaje": "Cita cancelada. La franja horaria fue liberada automáticamente por la base de datos.",
   "cita": {
     "id": 201,
     "id_paciente": 45,
@@ -479,17 +485,17 @@ The following example walks through the end-to-end lifecycle: creating a new app
   </Step>
 
   <Step title="Verify on the calendar">
-    Fetch the calendar for the target month. The new appointment appears with the `pendiente` amber color (`#B45309`).
+    Fetch the calendar for the target month. The new appointment appears with the `pendiente` amber fill (`#B45309`) and darker amber border (`#92400E`).
 
     ```bash
     curl -X GET "http://localhost:3000/citas/calendario?inicio=2025-09-01&fin=2025-09-30" \
       -H "Authorization: Bearer <token>"
-    # → 200 [{ "id": 201, "backgroundColor": "#B45309", ... }]
+    # → 200 [{ "id": "201", "backgroundColor": "#B45309", "borderColor": "#92400E", ... }]
     ```
   </Step>
 
   <Step title="Cancel the appointment">
-    Cancel with a reason. The database trigger fires and frees the slot automatically.
+    Cancel with a reason in the request body. The database trigger fires and frees the slot automatically.
 
     ```bash
     curl -X PATCH http://localhost:3000/citas/201 \

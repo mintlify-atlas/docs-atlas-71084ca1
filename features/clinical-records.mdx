@@ -1,38 +1,79 @@
 ---
 title: "Clinical Records: Structured Medical Histories in MELIKA"
 sidebarTitle: "Clinical Records"
-description: "MELIKA stores structured clinical histories per appointment, including CIE-10 diagnoses, treatment plans, JSONB prescription data, clarification notes, and PDF export."
+description: "MELIKA clinical records: per-appointment histories with CIE-10 codes, vitals, treatment plans, prescriptions, clarification notes, and PDF export support."
 ---
 
-MELIKA's clinical records system (`historias_clinicas`) gives doctors a structured workspace to document every consultation from chief complaint through diagnosis and treatment plan. Records are created after managing a completed appointment, can be supplemented with clarification notes at any time, and support both external document attachments and full PDF export — all with strict role-based access so only the treating doctor can author a record while the patient retains read-only visibility into their own health history.
+MELIKA's clinical records system (`historias_clinicas`) gives doctors a structured workspace to document every consultation — from chief complaint through diagnosis, vitals, and treatment plan. Records are tightly coupled to a completed appointment, can be supplemented with clarification or evolution notes at any time, and support external document attachments plus full PDF export. Strict role-based access ensures only the treating doctor can author a record, while the patient retains read-only visibility into their own health history.
 
 ## What a Clinical Record Contains
 
-Each `historia_clinica` is linked one-to-one with a managed appointment. The record is composed of both free-text narrative fields and a structured JSONB array for prescribed medications.
+Each `historia_clinica` is linked one-to-one with a managed appointment via `id_cita`. The table is broad and covers narrative, vitals, diagnosis, treatment, and administrative signature fields.
+
+### Core narrative fields
 
 | Field | Type | Required | Description |
 |---|---|---|---|
+| `tipo_registro` | `varchar` | ✅ Yes | `'historia_principal'`, `'nota_aclaracion'`, or `'nota_evolucion'` |
+| `estado` | `varchar` | ✅ Yes | Record status — always `'activo'` on creation |
 | `motivo_consulta` | `text` | ✅ Yes | Chief complaint — the patient's stated reason for the visit |
-| `anamnesis` | `text` | No | Clinical history and symptom narrative taken from the patient |
-| `examen_fisico` | `text` | No | Physical examination findings recorded by the doctor |
-| `diagnostico_cie10` | `varchar` | No | ICD-10 / CIE-10 diagnostic code (e.g., `I10` for hypertension) |
-| `descripcion_diagnostico` | `text` | No | Plain-language description of the diagnosis |
-| `plan_tratamiento` | `text` | No | Treatment plan, follow-up instructions, referrals |
-| `medicamentos_recetados` | `jsonb` | No | Structured array of prescribed medications (see below) |
-| `observaciones` | `text` | No | Additional notes or observations for the record |
+| `anamnesis` | `text` | ✅ Yes | Clinical history and symptom narrative taken from the patient |
+| `antecedentes_patologicos` | `text` | ✅ Yes | Pathological background (chronic conditions, prior illnesses) |
+| `antecedentes_alergicos` | `text` | ✅ Yes | Known allergies |
+| `examen_fisico` | `text` | ✅ Yes | Physical examination findings recorded by the doctor |
+| `diagnostico_cie10` | `varchar` | ✅ Yes | ICD-10 / CIE-10 diagnostic code (e.g., `I10` for hypertension) |
+| `descripcion_diagnostico` | `text` | ✅ Yes | Plain-language description of the diagnosis |
+| `plan_tratamiento` | `text` | ✅ Yes | Treatment plan, follow-up instructions, referrals |
+| `antecedentes_quirurgicos` | `text` | No | Surgical history |
+| `antecedentes_familiares` | `text` | No | Relevant family medical history |
+| `antecedentes_ginecoobstetricos` | `text` | No | Gynecological / obstetric history |
+| `habitos` | `text` | No | Lifestyle habits (smoking, alcohol, exercise) |
+| `exploracion_por_sistemas` | `text` | No | Systems review findings |
+| `ordenes_medicas` | `text` | No | Supplementary medical orders |
+| `recomendaciones` | `text` | No | Patient recommendations and aftercare instructions |
+| `incapacidad_dias` | `integer` | No | Medical leave days granted |
+| `observaciones` | `text` | No | Additional clinical observations |
+| `eps_aseguradora` | `varchar` | No | Patient's health insurer |
+| `contacto_responsable_nombre` | `varchar` | No | Name of responsible contact |
+| `contacto_responsable_telefono` | `varchar` | No | Phone of responsible contact |
+
+### Vitals fields
+
+| Field | Type | Description |
+|---|---|---|
+| `tension_arterial_sistolica` | `numeric` | Systolic blood pressure (mmHg) |
+| `tension_arterial_diastolica` | `numeric` | Diastolic blood pressure (mmHg) |
+| `frecuencia_cardiaca` | `numeric` | Heart rate (bpm) |
+| `frecuencia_respiratoria` | `numeric` | Respiratory rate (breaths/min) |
+| `temperatura_corporal` | `numeric` | Body temperature (°C) |
+| `peso_kg` | `numeric` | Weight in kilograms |
+| `talla_cm` | `numeric` | Height in centimeters |
+| `imc` | `numeric` | Body Mass Index — calculated automatically from `peso_kg` and `talla_cm` |
+
+### Prescription and signature fields
+
+| Field | Type | Description |
+|---|---|---|
+| `medicamentos_recetados` | `jsonb` | Prescribed medications stored as `{ "texto": "..." }` — see Prescribed Medications below |
+| `medico_nombre_firma` | `varchar` | ✅ Required — Doctor's full name for the record signature |
+| `medico_cedula_firma` | `varchar` | Doctor's ID number for the signature |
+| `medico_rethus_firma` | `varchar` | ✅ Required — Doctor's RETHUS professional registration number |
+| `id_historia_original` | `integer` | FK to the parent `historia_principal` — set on clarification/evolution notes |
 
 <Note>
-  Only `motivo_consulta` is mandatory when creating a clinical record. All other fields are optional and can be filled progressively as the consultation proceeds.
+  The `imc` (BMI) is always **computed server-side** from `peso_kg` and `talla_cm`. Do not send it in the request body — it will be calculated and stored automatically.
 </Note>
 
 ## Doctor Workflow
 
 <Steps>
-  <Step title="Manage the Appointment">
-    Once a patient's appointment reaches its scheduled time, the treating doctor navigates to the appointment and selects **Gestionar**. This action transitions the `cita` to `completada` and opens the clinical record editor.
+  <Step title="Complete the Appointment">
+    Once a patient's appointment reaches its scheduled time, the treating doctor navigates to the appointment and selects **Gestionar**, marking the `cita` as `completada` or `no_asistio` via `PATCH /historias/gestionar-cita/:id`.
   </Step>
   <Step title="Create the Clinical Record">
-    The doctor fills in the `historia_clinica` fields. At minimum, `motivo_consulta` must be provided. Medications are added as a structured JSONB array (see Prescribed Medications below).
+    The doctor fills in the `historia_clinica` fields. The mandatory fields listed above must all be present. The request also accepts optional `recetas` and `examenes` arrays, which are inserted into separate `recetas_medicas` and `ordenes_examenes` tables within the same database transaction.
+
+    Creating a clinical record automatically sets the linked `cita.estado` to `'completada'`.
 
     ```http
     POST /historias
@@ -42,77 +83,92 @@ Each `historia_clinica` is linked one-to-one with a managed appointment. The rec
       "id_cita": 42,
       "motivo_consulta": "Dolor de cabeza recurrente con náuseas",
       "anamnesis": "Paciente refiere episodios de cefalea 3 veces por semana durante el último mes",
+      "antecedentes_patologicos": "Hipertensión arterial diagnosticada hace 5 años",
+      "antecedentes_alergicos": "Alergia a penicilina",
       "examen_fisico": "TA 130/85 mmHg, FC 78 lpm. Sin déficit neurológico focal.",
       "diagnostico_cie10": "G43.9",
       "descripcion_diagnostico": "Migraña sin aura, sin mención de estado migrañoso",
       "plan_tratamiento": "Iniciar profilaxis con Amitriptilina 10mg/noche. Control en 4 semanas.",
-      "medicamentos_recetados": [
+      "medicamentos_recetados": "Amitriptilina 10mg, 1 tableta vía oral cada noche por 30 días",
+      "medico_nombre_firma": "Dr. Carlos Vargas Mejía",
+      "medico_rethus_firma": "RM-2019-04521",
+      "peso_kg": 72,
+      "talla_cm": 170,
+      "recetas": [
         {
-          "id": 18,
-          "nombre": "Ibuprofeno",
-          "dosis": "400mg",
-          "frecuencia": "cada 8h"
+          "medicamento": "Amitriptilina",
+          "dosis": "10mg",
+          "frecuencia": "cada noche",
+          "duracion": "30 días",
+          "via_administracion": "oral"
         }
       ],
-      "observaciones": "Se recomienda llevar diario de cefaleas"
+      "examenes": []
     }
     ```
   </Step>
-  <Step title="Add Clarification Notes (Optional)">
-    After saving the record, the doctor can append clarification notes at any time — for example, to document updated findings from a follow-up call or lab result.
+  <Step title="Add Clarification or Evolution Notes (Optional)">
+    After saving the record, the doctor can append a clarification (`nota_aclaracion`) or evolution (`nota_evolucion`) note at any time. The note is a **new row** in `historias_clinicas` linked to the original via `id_historia_original`. Both routes reach the same controller.
 
     ```http
     POST /historias/:id/aclaracion
     Content-Type: application/json
 
     {
-      "aclaracion": "Resultados de MRI sin hallazgos patológicos. Se descarta causa estructural."
+      "tipo_registro": "nota_aclaracion",
+      "motivo_consulta": "Actualización tras resultados de MRI",
+      "medico_nombre_firma": "Dr. Carlos Vargas Mejía",
+      "medico_rethus_firma": "RM-2019-04521"
     }
     ```
+
+    `tipo_registro` must be either `"nota_aclaracion"` or `"nota_evolucion"`. All other clinical fields are optional on notes but follow the same shape as the main record.
+
+    The same endpoint is also reachable via `PUT /historias/:id` for backward compatibility.
   </Step>
 </Steps>
 
-## Prescribed Medications (JSONB)
+## Prescribed Medications
 
-The `medicamentos_recetados` field stores an array of prescription objects as PostgreSQL JSONB. Each entry references a medication from the `medicamentos` catalog and includes dosing instructions.
+The `medicamentos_recetados` column is a `jsonb` field that stores prescriptions as a **plain text object**: `{ "texto": "..." }`. The value sent by the client may be a plain string or an object with a `texto` key — the server normalizes both forms before persisting.
 
 ```json
-[
-  {
-    "id": 1,
-    "nombre": "Ibuprofeno",
-    "dosis": "400mg",
-    "frecuencia": "cada 8h"
-  },
-  {
-    "id": 7,
-    "nombre": "Amoxicilina",
-    "dosis": "500mg",
-    "frecuencia": "cada 12h por 7 días"
-  }
-]
+{ "texto": "Amitriptilina 10mg, 1 tableta oral cada noche × 30 días. Ibuprofeno 400mg cada 8h SOS." }
 ```
 
-<Tip>
-  The `id` field links back to the `medicamentos` table, enabling the frontend to resolve full medication details (lab, presentations, type) at render time. Always include the `id` when building this array.
-</Tip>
-
-## Clarification Notes
-
-Clarification notes allow the treating doctor to append precision updates to an existing clinical record without replacing the original documented content. This is useful after receiving external lab results or when a patient calls with new information.
-
-```http
-POST /historias/:id/aclaracion
-Content-Type: application/json
-
-{
-  "aclaracion": "Cultivo de orina negativo. Se suspende antibiótico y se continúa solo con antiinflamatorio."
-}
-```
+When the record is returned to the frontend, the server deserializes this back to the plain string stored in `texto` for display and PDF rendering.
 
 <Note>
-  Aclaraciones are additive — they append to the record rather than overwriting any existing field. The original `historia_clinica` data is preserved in full.
+  For structured per-medication rows with dosing fields, use the `recetas` array in the `POST /historias` request body instead. Each entry is stored in the separate `recetas_medicas` table with columns: `medicamento`, `dosis`, `frecuencia`, `duracion`, `via_administracion`, and `indicaciones`.
 </Note>
+
+## Retrieving Clinical Records
+
+<Tabs>
+  <Tab title="By Appointment">
+    Returns the `historia_principal` for a given appointment, along with its linked `aclaraciones` (clarification/evolution notes), `recetas`, and `examenes` arrays.
+
+    ```http
+    GET /historias/cita/:id_cita
+    ```
+
+    When no record has been created yet, returns `{ historia: null, aclaraciones: [], recetas: [], examenes: [] }` (not a 404).
+  </Tab>
+  <Tab title="By Record ID (Full)">
+    Returns a complete clinical record including all joined patient and doctor data (name, ID document, birth date, city, gender, specialty, appointment date).
+
+    ```http
+    GET /historias/:id/completa
+    ```
+  </Tab>
+  <Tab title="Patient History">
+    Returns a summary list of all `historia_principal` records for a given patient, ordered by creation date descending. Includes CIE-10 code, diagnosis description, treating doctor, specialty, and total clarification count per record.
+
+    ```http
+    GET /historias/paciente/:id_paciente
+    ```
+  </Tab>
+</Tabs>
 
 ## Clinical Documents
 
@@ -120,43 +176,61 @@ External clinical documents — such as laboratory results, imaging reports, or 
 
 <Tabs>
   <Tab title="Register a Document">
-    Doctors or staff can attach external documents to a clinical record:
-
     ```http
     POST /historias/documentos
     Content-Type: application/json
 
     {
       "id_historia": 15,
-      "nombre": "Hemograma completo",
-      "url": "https://storage.melika.app/docs/hemograma-42.pdf",
-      "tipo": "laboratorio"
+      "id_paciente": 8,
+      "tipo_documento": "formula_medica",
+      "nombre_archivo": "formula_amitriptilina.pdf",
+      "url_pdf": "https://storage.melika.app/docs/formula-42.pdf",
+      "descripcion": "Fórmula médica post-consulta neurología"
     }
     ```
+
+    **Required fields:** `id_paciente`, `tipo_documento`, `url_pdf`.
+
+    Allowed `tipo_documento` values depend on the caller's role:
+
+    | Role | Allowed types |
+    |---|---|
+    | `medico` | `formula_medica`, `orden_examen`, `historia_clinica` |
+    | `paciente` | `documento_externo` |
+
+    Doctors may only register documents for patients with whom they have at least one shared appointment.
+  </Tab>
+  <Tab title="List Documents">
+    ```http
+    GET /historias/documentos/paciente/:id_paciente
+    ```
+
+    Patients see only documents where `oculto_paciente = FALSE`. Doctors see all documents for patients linked to their caseload.
   </Tab>
   <Tab title="Hide a Document (Patient)">
-    Patients can hide specific documents from their visible record view. Hidden documents are not deleted — they remain in the database but are excluded from the patient-facing display.
+    Patients can hide documents they uploaded (`origen = 'paciente'`) from their visible record view. Documents created by the doctor cannot be hidden.
 
     ```http
     PATCH /historias/documentos/:id/ocultar
     ```
 
     <Warning>
-      Hiding a document only affects the patient's view. The document remains accessible to the treating doctor and administrative staff.
+      Hiding a document only affects the patient's view. The document remains in the database and is still visible to the treating doctor.
     </Warning>
   </Tab>
 </Tabs>
 
 ## PDF Export and In-Browser Viewer
 
-MELIKA provides full PDF generation and in-browser viewing of clinical records.
+MELIKA provides full PDF generation and in-browser viewing of clinical records, entirely client-side.
 
 <CardGroup cols={2}>
   <Card title="PDF Generation" icon="file-pdf">
-    The `PlantillaHistoriaPDF.jsx` component uses **@react-pdf/renderer** to compile all clinical record fields — including the medication list, CIE-10 code, and clarification notes — into a downloadable PDF document. The PDF is generated client-side on demand.
+    The `PlantillaHistoriaPDF.jsx` component uses **@react-pdf/renderer** to compile all clinical record fields — including the medication text, CIE-10 code, and clarification notes — into a downloadable PDF. Three templates are available: Historia Clínica, Fórmula Médica, and Orden de Exámenes.
   </Card>
   <Card title="In-Browser Viewer" icon="eye">
-    The `VisorPDFModal.jsx` component uses **@pdfslick/react** to render the generated PDF directly in a modal overlay, allowing patients and doctors to review the document without leaving the application or downloading the file.
+    The `VisorPDFModal.jsx` component renders the generated PDF directly in a modal overlay, allowing patients to review the document without leaving the application or downloading the file.
   </Card>
 </CardGroup>
 
@@ -166,14 +240,14 @@ MELIKA provides full PDF generation and in-browser viewing of clinical records.
 
 ## Access Control
 
-Clinical records enforce strict role-based access.
+Clinical records enforce strict role-based access. Authorization is checked at the controller level before any database write.
 
 | Role | Permissions |
 |---|---|
-| `medico` (treating doctor) | Create record, edit all fields, add aclaraciones, register documents |
-| `paciente` | Read their own records, hide documents from their view |
-| `admin` | Read-only access for auditing; cannot author or edit clinical content |
+| `medico` (treating doctor) | Create record, add clarification/evolution notes, register documents, manage appointment state |
+| `medico` (other doctor) | Read records only if they have at least one shared appointment with the patient |
+| `paciente` | Read their own records and documents; hide patient-uploaded documents from their view |
 
 <Warning>
-  Only the **treating doctor** (the `medico` linked to the original `cita`) can create or modify a clinical record. Other doctors cannot edit records they did not author.
+  Only the **treating doctor** (the `medico` linked to the original `cita`) can create a clinical record for that appointment. Other doctors can view but cannot author records they did not originate.
 </Warning>

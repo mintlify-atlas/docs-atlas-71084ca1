@@ -1,5 +1,5 @@
 ---
-title: "Patient Role: Booking Appointments and Viewing Records"
+title: "Patient Role: Booking Appointments and Records"
 sidebarTitle: "Patient"
 description: "What patients can do in MELIKA — registration, email verification, appointment booking, calendar view, clinical record access, and document management."
 ---
@@ -10,16 +10,18 @@ Patients are the primary end users of MELIKA. After registering and verifying th
 
 To create a MELIKA patient account, the following fields are required at sign-up:
 
-| Field | Type | Notes |
+| Field | Type | Validation rules |
 |---|---|---|
-| `nombre` | `string` | First name |
-| `primer_apellido` | `string` | First surname |
-| `email` | `string` | Must be unique; used for verification |
-| `password` | `string` | Stored as a bcrypt hash |
+| `nombre` | `string` | Letters and spaces only; min 2 chars; no digits or repeated characters |
+| `primer_apellido` | `string` | Letters and spaces only; min 2 chars; no digits or repeated characters |
+| `email` | `string` | Must match `user@domain.tld` format; must be unique |
+| `password` | `string` | Min 6 characters; avoid trivially repeated characters (e.g. `111111`) |
 | `tipo_documento` | `enum` | One of `CC`, `CE`, or `PASAPORTE` |
-| `numero_documento` | `string` | National ID / passport number |
-| `fecha_nacimiento` | `date` | Format `YYYY-MM-DD` |
-| `genero` | `string` | Patient's gender |
+| `numero_documento` | `string` | Digits only, 5–15 characters; no letters or symbols; must be unique |
+| `fecha_nacimiento` | `date` | Format `YYYY-MM-DD`; cannot be in the future; calculated age must be 0–120 years |
+| `genero` | `enum` | One of `M`, `F`, or `O` |
+
+Validation is run server-side by `validarRegistroUsuario`. All errors are collected and returned together in a single `422` response — the request is never rejected on just the first failing field.
 
 After submission, the account is created in an **unverified** state and the patient is taken through the email verification step before gaining access to authenticated routes.
 
@@ -32,7 +34,7 @@ Before a newly registered patient can book appointments or view records, MELIKA 
     Immediately after registration, MELIKA sends a **6-digit numeric code** to the provided email address. The code is valid for **15 minutes**.
   </Step>
   <Step title="Enter the code">
-    The patient enters the code on the verification screen. A correct submission marks the account as verified and issues a session token.
+    The patient enters the code on the verification screen. A correct submission sets both `activo = TRUE` and `verificado = TRUE` on the account, allowing the patient to log in.
   </Step>
   <Step title="Resend if needed">
     If the code expires or is not received, the patient can request a new code from the same verification screen. A fresh 15-minute window starts on every resend.
@@ -42,6 +44,17 @@ Before a newly registered patient can book appointments or view records, MELIKA 
 <Note>
   Verification codes are single-use. Requesting a resend immediately invalidates the previous code.
 </Note>
+
+## Session Storage
+
+After a successful login, the frontend stores two entries in `localStorage`:
+
+| Key | Contents |
+|---|---|
+| `melika_token` | The raw JWT string (valid for 8 hours) |
+| `melika_usuario` | JSON-serialised user object (`id`, `nombre`, `primer_apellido`, `email`, `rol`) |
+
+These keys are read by `AuthContext` on page load to restore the session without requiring a new login. Both keys are removed from `localStorage` when the patient calls `logout()`.
 
 ## Booking an Appointment
 
@@ -176,7 +189,7 @@ This route is protected by the `isPaciente` middleware guard, ensuring only the 
 
 ## Dashboard and Route Guard
 
-The patient dashboard is available at `/dashboard`. Access is controlled by the `RutaPaciente` guard defined in `App.jsx`, which reads the `rol` claim from the JWT token.
+The patient dashboard is available at `/dashboard`. Access is controlled by the `RutaPaciente` guard defined in `App.jsx`, which reads the `rol` claim from the decoded user object stored under the `melika_usuario` key in `localStorage`.
 
 <Note>
   If a user with a **medico** or **admin** role attempts to navigate to `/dashboard`, the `RutaPaciente` guard redirects them automatically to their own dashboard (`/dashboard-medico` or `/admin`, respectively). Role-based redirects work symmetrically — each guard enforces separation between the three panels.

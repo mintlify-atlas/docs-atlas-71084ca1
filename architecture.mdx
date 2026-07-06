@@ -1,7 +1,7 @@
 ---
-title: "MELIKA System Architecture and Project Structure"
+title: "MELIKA Architecture: API, Client, and Database Design"
 sidebarTitle: "Architecture"
-description: "How MELIKA's React frontend, Express REST API, and PostgreSQL database connect — including the role-based auth flow, route organization, and database schema design."
+description: "How MELIKA's React frontend, Express API, and PostgreSQL database connect — covering the auth flow, route table, and full database schema."
 ---
 
 MELIKA is composed of two independently deployable services — a Node.js/Express REST API and a React/Vite single-page application — backed by a single PostgreSQL database. This page explains how those pieces fit together: how the client talks to the server, how the server enforces role boundaries, and how the database is structured to guarantee data integrity and a complete audit trail.
@@ -10,7 +10,7 @@ MELIKA is composed of two independently deployable services — a Node.js/Expres
 
 MELIKA follows a classic three-tier architecture deployed as two Railway services sharing one managed database:
 
-```
+```text
 ┌─────────────────────────────┐        HTTPS / JSON
 │   React SPA (client/)       │ ◄─────────────────────► ┌──────────────────────────────┐
 │   Vite 8 · React Router v7  │                          │   Express API (server/)       │
@@ -168,11 +168,14 @@ The `melika_db` PostgreSQL database contains the following tables:
 | `tokens_invitacion` | Single-use invitation tokens emailed to new doctors by an admin |
 | `especialidades` | Medical specialties catalogue (cardiology, general medicine, etc.) |
 | `medicamentos` | Platform-wide medications catalogue for use in clinical records |
-| `medicos` | Doctor profiles linked to a `usuarios` record and one or more specialties |
-| `franjas_horarias` | 40-minute time slots per doctor per date, with an `disponible` boolean |
+| `medicos` | Doctor profiles linked to a `usuarios` record and a single specialty via `id_especialidad` |
+| `franjas_horarias` | Time slots per doctor per date, with a `disponible` boolean and `hora_inicio < hora_fin` constraint |
 | `citas` | Appointment records linking a patient, a doctor, and a `franjas_horarias` row |
-| `historias_clinicas` | Clinical records per appointment; `medicamentos_recetados` stored as JSONB |
+| `historias_clinicas` | Clinical records per appointment; `medicamentos_recetados` stored as JSONB; extended with vital signs, anamnesis blocks, and legal-closure fields |
 | `logs_citas` | Immutable audit log of every INSERT/UPDATE/DELETE on the `citas` table |
+| `documentos_clinicos` | Append-only store of generated PDF documents (clinical records, prescriptions, lab orders, external documents) linked to a patient and optionally to a history record |
+| `recetas_medicas` | Individual prescription lines (medication, dose, frequency, duration, route of administration) linked to a `historias_clinicas` row |
+| `ordenes_examenes` | Lab and imaging orders (exam type, name, clinical justification) linked to a `historias_clinicas` row |
 
 ---
 

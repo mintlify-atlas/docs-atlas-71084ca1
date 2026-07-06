@@ -1,7 +1,7 @@
 ---
-title: "Doctor Schedule API — Time Slots and Availability Management"
+title: "Doctor Schedule API — Time Slots and Availability"
 sidebarTitle: "Schedules"
-description: "MELIKA's schedule endpoints let doctors create, edit, and delete 40-minute availability slots (franjas), and view their daily or range agenda in FullCalendar format."
+description: "Manage doctor availability in MELIKA: create, edit, and delete 40-minute slots (franjas), and retrieve daily or date-range agenda views for FullCalendar."
 ---
 
 MELIKA's scheduling system is built around **franjas horarias** — fixed 40-minute availability blocks that doctors publish to open themselves up for patient bookings. Each franja represents one bookable slot on a specific date. Doctors manage their own franjas through the `/medico/franjas` routes and can inspect their booked schedule through two agenda views: a flat daily list and a FullCalendar-ready range response that encodes appointment state as colored events. All schedule endpoints require a valid doctor Bearer token.
@@ -36,54 +36,40 @@ A `franja_horaria` record represents a single 40-minute time slot.
 GET /medico/agenda?fecha=YYYY-MM-DD
 ```
 
-Returns all time slots for the authenticated doctor on the specified date, including appointment details for any booked slots. Ideal for displaying a single day's schedule in a list or timeline view.
+Returns all appointments for the authenticated doctor on the specified date, ordered by `hora_inicio`. Ideal for displaying a single day's schedule in a list or timeline view. If `fecha` is omitted it defaults to today's date.
 
 **Auth:** `verifyToken` + `isMedico`
 
 #### Query Parameters
 
-<ParamField query="fecha" type="string" required>
-  The date to query in `YYYY-MM-DD` format (e.g. `2025-07-21`).
+<ParamField query="fecha" type="string">
+  The date to query in `YYYY-MM-DD` format (e.g. `2025-07-21`). Defaults to today if omitted.
 </ParamField>
 
 #### Response
 
-An array of slot objects for the given date.
+An object containing the queried date and an array of appointment objects for that day.
 
-<ResponseField name="slots" type="array">
-  Array of time slot objects for the requested day.
+<ResponseField name="fecha" type="string">
+  The date that was queried (`YYYY-MM-DD`).
+</ResponseField>
 
-  <Expandable title="Slot object fields">
-    <ResponseField name="id" type="integer">
-      Franja ID.
-    </ResponseField>
-    <ResponseField name="fecha" type="string">
-      Date of the slot (`YYYY-MM-DD`).
-    </ResponseField>
-    <ResponseField name="hora_inicio" type="string">
-      Slot start time (`HH:MM`).
-    </ResponseField>
-    <ResponseField name="hora_fin" type="string">
-      Slot end time (`HH:MM`).
-    </ResponseField>
-    <ResponseField name="disponible" type="boolean">
-      `true` if the slot is open; `false` if it has been booked.
-    </ResponseField>
-    <ResponseField name="cita_id" type="integer">
-      ID of the linked appointment. Present only when `disponible` is `false`.
-    </ResponseField>
-    <ResponseField name="paciente_nombre" type="string">
-      Patient's first name. Present only when booked.
-    </ResponseField>
-    <ResponseField name="paciente_apellido" type="string">
-      Patient's first surname. Present only when booked.
-    </ResponseField>
-    <ResponseField name="estado" type="string">
-      Appointment state (`pendiente`, `completada`, `no_asistio`). Present only when booked.
-    </ResponseField>
-    <ResponseField name="motivo" type="string">
-      Patient's stated reason for the visit. Present only when booked.
-    </ResponseField>
+<ResponseField name="citas" type="array">
+  Array of appointment objects for the requested day, ordered by `hora_inicio`.
+
+  <Expandable title="Appointment object fields">
+    <ResponseField name="id" type="integer">Appointment ID.</ResponseField>
+    <ResponseField name="fecha" type="string">Date of the appointment (`YYYY-MM-DD`), formatted via SQL `TO_CHAR`.</ResponseField>
+    <ResponseField name="hora_inicio" type="string">Appointment start time (`HH:MM`).</ResponseField>
+    <ResponseField name="tipo_consulta" type="string">`presencial` or `teleconsulta`.</ResponseField>
+    <ResponseField name="motivo" type="string">Patient's stated reason for the visit.</ResponseField>
+    <ResponseField name="estado" type="string">Appointment state: `pendiente`, `completada`, `cancelada`, or `no_asistio`.</ResponseField>
+    <ResponseField name="notas_medicas" type="string">Clinical notes added by the doctor, if any.</ResponseField>
+    <ResponseField name="paciente_nombre" type="string">Patient's first name.</ResponseField>
+    <ResponseField name="paciente_apellido" type="string">Patient's first surname.</ResponseField>
+    <ResponseField name="paciente_telefono" type="string">Patient's phone number.</ResponseField>
+    <ResponseField name="especialidad" type="string">Specialty name.</ResponseField>
+    <ResponseField name="historia_id" type="integer">ID of the linked `historia_clinica` record, if one exists.</ResponseField>
   </Expandable>
 </ResponseField>
 
@@ -91,9 +77,9 @@ An array of slot objects for the given date.
 
 | Status | Description |
 |--------|-------------|
-| `400`  | Missing or malformed `fecha` query parameter. |
 | `401`  | Missing or invalid Bearer token. |
 | `403`  | Authenticated user is not a doctor. |
+| `404`  | Doctor profile not found for the authenticated user. |
 | `500`  | Internal server error. |
 
 #### Example
@@ -105,27 +91,25 @@ curl -X GET "http://localhost:3000/medico/agenda?fecha=2025-07-21" \
 ```
 
 ```json Response
-[
-  {
-    "id": 101,
-    "fecha": "2025-07-21",
-    "hora_inicio": "09:00",
-    "hora_fin": "09:40",
-    "disponible": false,
-    "cita_id": 42,
-    "paciente_nombre": "Sofía",
-    "paciente_apellido": "Ramos",
-    "estado": "pendiente",
-    "motivo": "Dolor de cabeza persistente"
-  },
-  {
-    "id": 102,
-    "fecha": "2025-07-21",
-    "hora_inicio": "09:40",
-    "hora_fin": "10:20",
-    "disponible": true
-  }
-]
+{
+  "fecha": "2025-07-21",
+  "citas": [
+    {
+      "id": 42,
+      "fecha": "2025-07-21",
+      "hora_inicio": "09:00",
+      "tipo_consulta": "presencial",
+      "motivo": "Dolor de cabeza persistente",
+      "estado": "pendiente",
+      "notas_medicas": null,
+      "paciente_nombre": "Sofía",
+      "paciente_apellido": "Ramos",
+      "paciente_telefono": "3009876543",
+      "especialidad": "Neurología",
+      "historia_id": null
+    }
+  ]
+}
 ```
 </CodeGroup>
 
@@ -137,22 +121,22 @@ curl -X GET "http://localhost:3000/medico/agenda?fecha=2025-07-21" \
 GET /medico/agenda/rango?inicio=YYYY-MM-DD&fin=YYYY-MM-DD
 ```
 
-Returns all slots within a date range as an array of **FullCalendar event objects**. Each event's color encodes its availability or appointment state, making it straightforward to render directly in a FullCalendar instance without any client-side transformation.
+Returns all events within a date range as an array of **FullCalendar event objects**. The response merges two sets: booked appointments (excluding cancelled) and available unbooked franjas. Each event's color encodes its state, making it straightforward to render directly in a FullCalendar instance without client-side transformation.
 
 **Auth:** `verifyToken` + `isMedico`
 
 <Note>
-  The color encoding lets doctors scan their calendar at a glance: green slots are open, amber are pending, grey indicates a no-show, and completed appointments share the same green as open slots to reduce visual noise.
+  Both `inicio` and `fin` are required. Omitting either returns a `400` error. Available franjas appear first in the array, followed by booked appointment events.
 </Note>
 
 #### Color Reference
 
-| State | Hex Color | Meaning |
-|-------|-----------|---------|
-| `disponible` | `#1A7A52` | Slot is open and bookable. |
-| `pendiente` | `#B45309` | Appointment booked, not yet attended. |
-| `completada` | `#1A7A52` | Appointment successfully completed. |
-| `no_asistio` | `#6B7280` | Patient did not attend. |
+| State | Background | Border | Text | Meaning |
+|-------|-----------|--------|------|---------|
+| `disponible` | `#D1FAE5` | `#1A7A52` | `#065F46` | Slot is open and bookable. |
+| `pendiente` | `#B45309` | `#92400E` | `#fff` | Appointment booked, not yet attended. |
+| `completada` | `#1A7A52` | `#145C3E` | `#fff` | Appointment successfully completed. |
+| `no_asistio` | `#6B7280` | `#4B5563` | `#fff` | Patient did not attend. |
 
 #### Query Parameters
 
@@ -166,49 +150,37 @@ Returns all slots within a date range as an array of **FullCalendar event object
 
 #### Response
 
-An array of FullCalendar event objects.
+An array of FullCalendar-compatible event objects. Available franja events appear before appointment events.
 
-<ResponseField name="events" type="array">
-  Array of FullCalendar-compatible event objects.
-
-  <Expandable title="Event object fields">
-    <ResponseField name="id" type="integer">
-      Franja ID (used as the FullCalendar event ID).
-    </ResponseField>
-    <ResponseField name="title" type="string">
-      Display label for the event block on the calendar.
-    </ResponseField>
-    <ResponseField name="start" type="string">
-      ISO 8601 datetime string for the event start.
-    </ResponseField>
-    <ResponseField name="end" type="string">
-      ISO 8601 datetime string for the event end.
-    </ResponseField>
-    <ResponseField name="backgroundColor" type="string">
-      Hex color string determined by slot/appointment state.
-    </ResponseField>
-    <ResponseField name="borderColor" type="string">
-      Hex color string matching `backgroundColor`.
-    </ResponseField>
+<ResponseField name="[]" type="array of objects">
+  <Expandable title="Available franja event fields">
+    <ResponseField name="id" type="string">Prefixed string ID in the format `"franja-{id}"` (e.g. `"franja-101"`).</ResponseField>
+    <ResponseField name="title" type="string">`"🟢 Disponible (sin reservar)"`.</ResponseField>
+    <ResponseField name="start" type="string">ISO datetime string: `"YYYY-MM-DDTHH:MM"` (no seconds).</ResponseField>
+    <ResponseField name="end" type="string">ISO datetime string: `"YYYY-MM-DDTHH:MM"` (no seconds).</ResponseField>
+    <ResponseField name="backgroundColor" type="string">`#D1FAE5` (light green).</ResponseField>
+    <ResponseField name="borderColor" type="string">`#1A7A52` (dark green).</ResponseField>
+    <ResponseField name="textColor" type="string">`#065F46` (very dark green).</ResponseField>
+    <ResponseField name="display" type="string">Always `"block"`.</ResponseField>
     <ResponseField name="extendedProps" type="object">
-      Additional metadata attached to the event.
+      <Expandable title="extendedProps">
+        <ResponseField name="esFranjaDisponible" type="boolean">Always `true` for available franjas.</ResponseField>
+      </Expandable>
+    </ResponseField>
+  </Expandable>
 
-      <Expandable title="extendedProps fields">
-        <ResponseField name="disponible" type="boolean">
-          Whether the underlying franja is still open.
-        </ResponseField>
-        <ResponseField name="cita_id" type="integer">
-          Linked appointment ID, if booked.
-        </ResponseField>
-        <ResponseField name="estado" type="string">
-          Appointment state string, if booked.
-        </ResponseField>
-        <ResponseField name="paciente" type="string">
-          Patient's full name, if booked.
-        </ResponseField>
-        <ResponseField name="motivo" type="string">
-          Patient's reason for the visit, if booked.
-        </ResponseField>
+  <Expandable title="Booked appointment event fields">
+    <ResponseField name="id" type="string">Prefixed string ID in the format `"cita-{id}"` (e.g. `"cita-42"`).</ResponseField>
+    <ResponseField name="title" type="string">Display label: `"{Estado} · {paciente_nombre} {paciente_apellido}"` (e.g. `"Pendiente · Sofía Ramos"`).</ResponseField>
+    <ResponseField name="start" type="string">ISO datetime string: `"YYYY-MM-DDTHH:MM"` (no seconds).</ResponseField>
+    <ResponseField name="backgroundColor" type="string">Hex fill color per appointment state (see color reference above).</ResponseField>
+    <ResponseField name="borderColor" type="string">Darker hex border color per appointment state.</ResponseField>
+    <ResponseField name="textColor" type="string">Always `"#fff"`.</ResponseField>
+    <ResponseField name="extendedProps" type="object">
+      <Expandable title="extendedProps">
+        <ResponseField name="tipo" type="string">`presencial` or `teleconsulta`.</ResponseField>
+        <ResponseField name="estado" type="string">Appointment state string.</ResponseField>
+        <ResponseField name="esFranjaDisponible" type="boolean">Always `false` for booked appointments.</ResponseField>
       </Expandable>
     </ResponseField>
   </Expandable>
@@ -218,9 +190,10 @@ An array of FullCalendar event objects.
 
 | Status | Description |
 |--------|-------------|
-| `400`  | Missing or malformed `inicio` / `fin` parameters. |
+| `400`  | `inicio` or `fin` parameter is missing. |
 | `401`  | Missing or invalid Bearer token. |
 | `403`  | Authenticated user is not a doctor. |
+| `404`  | Doctor profile not found for the authenticated user. |
 | `500`  | Internal server error. |
 
 #### Example
@@ -234,33 +207,29 @@ curl -X GET "http://localhost:3000/medico/agenda/rango?inicio=2025-07-21&fin=202
 ```json Response
 [
   {
-    "id": 101,
-    "title": "Sofía Ramos — pendiente",
-    "start": "2025-07-21T09:00:00",
-    "end": "2025-07-21T09:40:00",
-    "backgroundColor": "#B45309",
-    "borderColor": "#B45309",
+    "id": "franja-102",
+    "title": "🟢 Disponible (sin reservar)",
+    "start": "2025-07-21T09:40",
+    "end": "2025-07-21T10:20",
+    "backgroundColor": "#D1FAE5",
+    "borderColor": "#1A7A52",
+    "textColor": "#065F46",
+    "display": "block",
     "extendedProps": {
-      "disponible": false,
-      "cita_id": 42,
-      "estado": "pendiente",
-      "paciente": "Sofía Ramos",
-      "motivo": "Dolor de cabeza persistente"
+      "esFranjaDisponible": true
     }
   },
   {
-    "id": 102,
-    "title": "Disponible",
-    "start": "2025-07-21T09:40:00",
-    "end": "2025-07-21T10:20:00",
-    "backgroundColor": "#1A7A52",
-    "borderColor": "#1A7A52",
+    "id": "cita-42",
+    "title": "Pendiente · Sofía Ramos",
+    "start": "2025-07-21T09:00",
+    "backgroundColor": "#B45309",
+    "borderColor": "#92400E",
+    "textColor": "#fff",
     "extendedProps": {
-      "disponible": true,
-      "cita_id": null,
-      "estado": null,
-      "paciente": null,
-      "motivo": null
+      "tipo": "presencial",
+      "estado": "pendiente",
+      "esFranjaDisponible": false
     }
   }
 ]
@@ -277,27 +246,31 @@ curl -X GET "http://localhost:3000/medico/agenda/rango?inicio=2025-07-21&fin=202
 GET /medico/franjas?fecha=YYYY-MM-DD
 ```
 
-Returns all `franja_horaria` records owned by the authenticated doctor for the specified date. Useful for checking which slots exist before creating new ones.
+Returns all `franja_horaria` records owned by the authenticated doctor. Optionally filtered to a specific date via the `fecha` query parameter. Each record includes a `cita_id` column — the ID of any non-cancelled appointment linked to that slot.
 
 **Auth:** `verifyToken` + `isMedico`
 
 #### Query Parameters
 
-<ParamField query="fecha" type="string" required>
-  The date to query in `YYYY-MM-DD` format.
+<ParamField query="fecha" type="string">
+  Optional date filter in `YYYY-MM-DD` format. If omitted, all franjas for the doctor are returned.
 </ParamField>
 
 #### Response
 
-Array of `franja_horaria` objects matching the query date (see the [data model](#franja-horaria-data-model) above for field descriptions).
+Array of `franja_horaria` objects (see the [data model](#franja-horaria-data-model) above), each extended with:
+
+<ResponseField name="cita_id" type="integer">
+  ID of the active (non-cancelled) appointment linked to this slot. `null` when the slot is still available.
+</ResponseField>
 
 #### Errors
 
 | Status | Description |
 |--------|-------------|
-| `400`  | Missing or malformed `fecha` query parameter. |
 | `401`  | Missing or invalid Bearer token. |
 | `403`  | Authenticated user is not a doctor. |
+| `404`  | Doctor profile not found for the authenticated user. |
 | `500`  | Internal server error. |
 
 #### Example
@@ -317,6 +290,7 @@ curl -X GET "http://localhost:3000/medico/franjas?fecha=2025-07-21" \
     "hora_inicio": "09:00",
     "hora_fin": "09:40",
     "disponible": false,
+    "cita_id": 42,
     "created_at": "2025-07-10T14:32:00.000Z"
   },
   {
@@ -326,6 +300,7 @@ curl -X GET "http://localhost:3000/medico/franjas?fecha=2025-07-21" \
     "hora_inicio": "09:40",
     "hora_fin": "10:20",
     "disponible": true,
+    "cita_id": null,
     "created_at": "2025-07-10T14:32:05.000Z"
   }
 ]
@@ -334,62 +309,67 @@ curl -X GET "http://localhost:3000/medico/franjas?fecha=2025-07-21" \
 
 ---
 
-### Create a Slot
+### Create Slots
 
 ```http
 POST /medico/franjas
 ```
 
-Creates a single 40-minute availability slot. The `hora_fin` must be exactly 40 minutes after `hora_inicio`. Duplicate slots (same doctor, date, and start time) are rejected with a `409` conflict.
+Generates multiple consecutive 40-minute availability slots from a given time window on a specific date. The controller internally calls `generarFranjasConDescanso`, splitting the `hora_inicio`→`hora_fin` range into 40-minute blocks and optionally skipping a break window. Slots that already exist for the same doctor, date, and start time are silently skipped (not duplicated).
 
 **Auth:** `verifyToken` + `isMedico`
 
 <Tip>
-  To open an entire workday at once, use `POST /admin/horarios/masivo` (admin only). That endpoint generates all consecutive 40-minute slots for a given doctor and date range in a single request — far faster than creating slots one by one.
+  This single endpoint replaces the need to create slots one by one. Supply the full working window (e.g. `08:00`→`17:00`) with an optional lunch break, and all 40-minute slots are generated in one request.
 </Tip>
 
 #### Request Body
 
 <ParamField body="fecha" type="string" required>
-  Date for the slot in `YYYY-MM-DD` format.
+  Date for the slots in `YYYY-MM-DD` format.
 </ParamField>
 
 <ParamField body="hora_inicio" type="string" required>
-  Slot start time in `HH:MM` format (e.g. `"09:00"`).
+  Start of the working window in `HH:MM` format (e.g. `"08:00"`). Must be earlier than `hora_fin`.
 </ParamField>
 
 <ParamField body="hora_fin" type="string" required>
-  Slot end time in `HH:MM` format. Must be exactly 40 minutes after `hora_inicio` (`DURACION_FRANJA_MIN = 40`).
+  End of the working window in `HH:MM` format (e.g. `"17:00"`).
+</ParamField>
+
+<ParamField body="inicio_descanso" type="string">
+  Start of an optional break period in `HH:MM` format (e.g. `"12:00"`). Slots overlapping the break window are skipped.
+</ParamField>
+
+<ParamField body="fin_descanso" type="string">
+  End of the break period in `HH:MM` format (e.g. `"13:00"`). Required when `inicio_descanso` is provided.
 </ParamField>
 
 #### Response `201`
 
 <ResponseField name="mensaje" type="string">
-  Confirmation that the slot was created.
+  Human-readable summary (e.g. `"Se crearon 10 franja(s) de 40 minutos exitosamente (2 ya existían)."`).
 </ResponseField>
 
-<ResponseField name="franja" type="object">
-  The newly created `franja_horaria` record.
+<ResponseField name="insertadas" type="integer">
+  Number of new slots actually inserted into the database.
+</ResponseField>
 
-  <Expandable title="franja object fields">
-    <ResponseField name="id" type="integer">Slot ID.</ResponseField>
-    <ResponseField name="id_medico" type="integer">Owning doctor's ID.</ResponseField>
-    <ResponseField name="fecha" type="string">Slot date (`YYYY-MM-DD`).</ResponseField>
-    <ResponseField name="hora_inicio" type="string">Start time (`HH:MM`).</ResponseField>
-    <ResponseField name="hora_fin" type="string">End time (`HH:MM`).</ResponseField>
-    <ResponseField name="disponible" type="boolean">Always `true` on creation.</ResponseField>
-    <ResponseField name="created_at" type="string">ISO 8601 creation timestamp.</ResponseField>
-  </Expandable>
+<ResponseField name="duplicadas" type="integer">
+  Number of slots skipped because they already existed for this doctor/date/hora_inicio combination.
+</ResponseField>
+
+<ResponseField name="franjas_intentadas" type="integer">
+  Total number of 40-minute blocks the generator attempted to create from the supplied window.
 </ResponseField>
 
 #### Errors
 
 | Status | Description |
 |--------|-------------|
-| `400`  | Missing fields, invalid time format, or duration is not exactly 40 minutes. |
+| `400`  | Missing required fields, `hora_inicio` ≥ `hora_fin`, or the time range produces no complete 40-minute blocks. |
 | `401`  | Missing or invalid Bearer token. |
-| `403`  | Authenticated user is not a doctor. |
-| `409`  | A slot for this doctor, date, and start time already exists (DB error `23505`). |
+| `403`  | Authenticated user has no doctor profile. |
 | `500`  | Internal server error. |
 
 #### Example
@@ -401,23 +381,19 @@ curl -X POST http://localhost:3000/medico/franjas \
   -H "Content-Type: application/json" \
   -d '{
     "fecha": "2025-07-22",
-    "hora_inicio": "10:00",
-    "hora_fin": "10:40"
+    "hora_inicio": "08:00",
+    "hora_fin": "12:00",
+    "inicio_descanso": "10:00",
+    "fin_descanso": "10:20"
   }'
 ```
 
 ```json Response 201
 {
-  "mensaje": "Franja horaria creada correctamente.",
-  "franja": {
-    "id": 115,
-    "id_medico": 7,
-    "fecha": "2025-07-22",
-    "hora_inicio": "10:00",
-    "hora_fin": "10:40",
-    "disponible": true,
-    "created_at": "2025-07-11T08:15:00.000Z"
-  }
+  "mensaje": "Se crearon 5 franja(s) de 40 minutos exitosamente.",
+  "insertadas": 5,
+  "duplicadas": 0,
+  "franjas_intentadas": 5
 }
 ```
 </CodeGroup>
@@ -446,36 +422,37 @@ Updates the date and/or time of an existing slot. Three constraints must all pas
 
 #### Request Body
 
-<ParamField body="fecha" type="string">
+<ParamField body="fecha" type="string" required>
   New date in `YYYY-MM-DD` format.
 </ParamField>
 
-<ParamField body="hora_inicio" type="string">
+<ParamField body="hora_inicio" type="string" required>
   New start time in `HH:MM` format.
 </ParamField>
 
-<ParamField body="hora_fin" type="string">
+<ParamField body="hora_fin" type="string" required>
   New end time in `HH:MM` format. Must be exactly 40 minutes after `hora_inicio`.
 </ParamField>
 
 #### Response
 
 <ResponseField name="mensaje" type="string">
-  Confirmation that the slot was updated.
+  Confirmation: `"Franja actualizada correctamente."`
 </ResponseField>
 
 <ResponseField name="franja" type="object">
-  The updated `franja_horaria` record (same shape as the create response).
+  The updated `franja_horaria` record (same shape as the list response).
 </ResponseField>
 
 #### Errors
 
 | Status | Description |
 |--------|-------------|
-| `400`  | Slot has an active appointment (`disponible = false`), duration is not 40 minutes, or the new time overlaps with another slot. |
+| `400`  | Missing required fields, `hora_inicio` ≥ `hora_fin`, duration is not exactly 40 minutes, or `disponible = false` (slot has an active appointment). |
 | `401`  | Missing or invalid Bearer token. |
-| `403`  | Authenticated user is not a doctor, or the slot belongs to another doctor. |
-| `404`  | No slot found with the given ID. |
+| `403`  | Authenticated user is not a doctor. |
+| `404`  | No slot found with the given ID, or it belongs to another doctor. |
+| `409`  | The new time range overlaps with another existing slot for this doctor and date. |
 | `500`  | Internal server error. |
 
 #### Example
@@ -494,7 +471,7 @@ curl -X PATCH http://localhost:3000/medico/franjas/115 \
 
 ```json Response
 {
-  "mensaje": "Franja horaria actualizada correctamente.",
+  "mensaje": "Franja actualizada correctamente.",
   "franja": {
     "id": 115,
     "id_medico": 7,
@@ -516,7 +493,7 @@ curl -X PATCH http://localhost:3000/medico/franjas/115 \
 DELETE /medico/franjas/:id
 ```
 
-Permanently removes a time slot. The slot must have `disponible = true`; slots with an active appointment attached cannot be deleted.
+Permanently removes a time slot. The slot must have `disponible = true`; slots with an active (non-cancelled) appointment attached cannot be deleted.
 
 **Auth:** `verifyToken` + `isMedico`
 
@@ -529,17 +506,17 @@ Permanently removes a time slot. The slot must have `disponible = true`; slots w
 #### Response
 
 <ResponseField name="mensaje" type="string">
-  `"Franja eliminada."` on success.
+  `"Franja horaria eliminada correctamente."` on success.
 </ResponseField>
 
 #### Errors
 
 | Status | Description |
 |--------|-------------|
-| `400`  | The slot has an active appointment: `"No se puede eliminar una franja con cita activa."` |
+| `400`  | The slot has an active appointment (`disponible = false`): `"No puedes eliminar una franja con cita reservada."` |
 | `401`  | Missing or invalid Bearer token. |
-| `403`  | Authenticated user is not a doctor, or the slot belongs to another doctor. |
-| `404`  | No slot found with the given ID. |
+| `403`  | Authenticated user is not a doctor. |
+| `404`  | No slot found with the given ID, or it belongs to another doctor. |
 | `500`  | Internal server error. |
 
 #### Example
@@ -552,13 +529,13 @@ curl -X DELETE http://localhost:3000/medico/franjas/115 \
 
 ```json Response
 {
-  "mensaje": "Franja eliminada."
+  "mensaje": "Franja horaria eliminada correctamente."
 }
 ```
 
 ```json Error — slot is booked
 {
-  "mensaje": "No se puede eliminar una franja con cita activa."
+  "mensaje": "No puedes eliminar una franja con cita reservada."
 }
 ```
 </CodeGroup>

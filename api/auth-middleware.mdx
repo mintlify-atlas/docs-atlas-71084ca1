@@ -1,7 +1,7 @@
 ---
-title: "Authorization Middleware and Role Guards in MELIKA"
+title: "MELIKA Auth Middleware: JWT Verification and Role Guards"
 sidebarTitle: "Auth Middleware"
-description: "MELIKA enforces access control through JWT verification and four role guards — verifyToken, isAdmin, isMedico, and isPaciente — applied per route or router-level."
+description: "MELIKA enforces access control via JWT verification and three role guards — isAdmin, isMedico, and isPaciente — always chained after verifyToken."
 ---
 
 MELIKA's access-control layer is composed of four Express middleware functions defined in `authMiddleware.js`. `verifyToken` validates the JWT on every protected request; the three role guards (`isAdmin`, `isMedico`, `isPaciente`) are applied on top of it to restrict individual routes or entire routers to a single role. All middleware functions attach data to `req.usuario` so subsequent handlers can read the authenticated user's identity without touching the database again.
@@ -14,22 +14,22 @@ MELIKA's access-control layer is composed of four Express middleware functions d
 
 ## verifyToken
 
-`verifyToken` reads the `Authorization` request header, extracts the Bearer token, and verifies it against `JWT_SECRET`. On success it populates `req.usuario` with the decoded payload and calls `next()`. On failure it ends the request immediately with a `401`.
+`verifyToken` reads the `authorization` request header (lowercase bracket notation: `req.headers['authorization']`), extracts the Bearer token, and verifies it against `JWT_SECRET`. On success it populates `req.usuario` with the decoded payload and calls `next()`. On failure it ends the request immediately with a `401`.
 
 ### How it works
 
 <Steps>
   <Step title="Read the header">
-    The middleware reads `req.headers.authorization`. If the header is absent or falsy, it returns `401` immediately.
+    The middleware reads `req.headers['authorization']` (lowercase key). If the header is absent or falsy, it returns `401` immediately.
   </Step>
   <Step title="Extract the token">
-    The header value is split on a space (`' '`) and the second element is taken as the Bearer token.
+    The header value is split on a space (`' '`) and index `[1]` is taken as the Bearer token.
   </Step>
   <Step title="Verify with JWT_SECRET">
     `jwt.verify(token, process.env.JWT_SECRET)` is called. If verification succeeds, the decoded object is stored on `req.usuario`.
   </Step>
   <Step title="Continue or reject">
-    A valid token calls `next()`. An invalid or expired token returns `401 'Token inválido o expirado.'`.
+    A valid token calls `next()`. An invalid or expired token returns `401` with `"Token inválido o expirado."`.
   </Step>
 </Steps>
 
@@ -37,7 +37,7 @@ MELIKA's access-control layer is composed of four Express middleware functions d
 
 | Status | Message | Trigger |
 |--------|---------|---------|
-| `401` | `"Acceso denegado. Token requerido."` | `Authorization` header is missing |
+| `401` | `"Acceso denegado. Token requerido."` | `authorization` header is missing |
 | `401` | `"Token inválido o expirado."` | Token signature is wrong or TTL has elapsed |
 
 ---
@@ -79,7 +79,7 @@ Place `verifyToken` and the appropriate role guard as the first arguments to `ro
 
 ```js
 // adminRoutes.js
-import { verifyToken, isAdmin } from '../middlewares/authMiddleware.js';
+const { verifyToken, isAdmin } = require('../middleware/authMiddleware');
 
 router.use(verifyToken, isAdmin); // all routes below require admin
 
@@ -93,7 +93,7 @@ Pass the guards directly in the route definition when only certain endpoints wit
 
 ```js
 // citasRoutes.js
-import { verifyToken, isMedico, isPaciente } from '../middlewares/authMiddleware.js';
+const { verifyToken, isMedico, isPaciente } = require('../middleware/authMiddleware');
 
 router.get('/mis-citas',      verifyToken, isPaciente, getMisCitas);
 router.put('/:id/confirmar',  verifyToken, isMedico,   confirmarCita);
@@ -171,7 +171,7 @@ router.put('/:id/confirmar',  verifyToken, isMedico,   confirmarCita);
 
 <CardGroup cols={2}>
   <Card title="verifyToken" icon="key">
-    Reads `Authorization: Bearer <token>`, verifies with `JWT_SECRET`, and populates `req.usuario`. Required on every protected route.
+    Reads `authorization` header via `req.headers['authorization']`, splits on space to get index `[1]`, verifies with `JWT_SECRET`, and populates `req.usuario`. Required on every protected route.
   </Card>
   <Card title="isAdmin" icon="shield-halved">
     Asserts `req.usuario.rol === 'admin'`. Returns `403` for any other role.

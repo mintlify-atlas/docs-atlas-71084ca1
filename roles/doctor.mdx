@@ -1,7 +1,7 @@
 ---
-title: "Doctor Role: Managing Schedules and Clinical Records"
+title: "Doctor Role: Schedules and Clinical Records"
 sidebarTitle: "Doctor"
-description: "How MELIKA doctors activate their accounts via invitation, manage 40-minute availability slots, run their daily agenda, and create structured clinical histories."
+description: "How MELIKA doctors activate via invitation token, manage 40-minute availability slots, run their daily agenda, and write structured clinical histories."
 ---
 
 Doctors in MELIKA do not self-register. An administrator creates each doctor account and the platform delivers an invitation email containing a one-time activation token. Once activated, the doctor gains access to a dedicated dashboard where they can configure their weekly availability, track their daily agenda, and build a longitudinal clinical record for every patient they treat.
@@ -10,27 +10,27 @@ Doctors in MELIKA do not self-register. An administrator creates each doctor acc
 
 <Steps>
   <Step title="Admin creates the doctor">
-    An administrator fills in the doctor's profile and submits a `POST /medicos` request. MELIKA stores the record and immediately dispatches an invitation email to the doctor's address containing a unique activation token. The account is created in an **inactive** state.
+    An administrator fills in the doctor's profile and submits a `POST /medicos` request. MELIKA stores the record and immediately dispatches an invitation email to the doctor's address containing a unique activation token. The account is created in an **inactive** (`activo = FALSE`, `verificado = FALSE`) state.
   </Step>
   <Step title="Doctor clicks the activation link">
-    The invitation email contains a link that embeds the activation token. Clicking it opens the MELIKA password-setup screen in the browser.
+    The invitation email contains a link that embeds the activation token. Clicking it opens the MELIKA password-setup screen at `/activar-cuenta?token=<token>` in the browser. **The token expires after 72 hours.** If the doctor does not activate in time, an administrator must issue a new invitation.
   </Step>
   <Step title="Doctor sets their password">
     The activation form sends a `POST` to `/medicos/activar` with the token and the chosen password:
 
     ```json
     {
-      "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-      "password": "SecurePassword123!"
+      "token": "a3f9c2e1b8d47...",
+      "nueva_password": "SecurePassword123!"
     }
     ```
 
-    On success, the account becomes active, the token is invalidated, and the doctor is redirected to `/dashboard-medico`.
+    The body field is `nueva_password` (not `password`). The password must be at least **6 characters** long. On success, the account is set to `activo = TRUE` and `verificado = TRUE`, the token is marked as used, and the doctor can log in.
   </Step>
 </Steps>
 
 <Note>
-  Activation tokens are single-use and expire after a fixed window. If the doctor does not activate in time, an administrator must issue a new invitation from the admin panel.
+  Activation tokens are single-use. Once the token has been consumed or has expired, it cannot be reused. An administrator must create a new invitation from the admin panel.
 </Note>
 
 ## Doctor Profile
@@ -55,9 +55,11 @@ Authorization: Bearer <token>
 
 ## Schedule Management
 
-Doctors control their own availability by creating and managing **time slots (franjas)**. Each slot is 40 minutes long. Patients can only book appointments into slots that are marked as available.
+Doctors control their own availability by creating and managing **time slots (franjas)**. Each slot is exactly **40 minutes** long. Patients can only book appointments into slots that are marked as available (`disponible = true`).
 
-### Creating a Slot
+### Creating Slots
+
+The `POST /medico/franjas` endpoint generates all 40-minute slots for a given date range automatically, with an optional break window:
 
 ```http
 POST /medico/franjas
@@ -67,14 +69,26 @@ Content-Type: application/json
 
 ```json
 {
-  "id_medico": 3,
   "fecha": "2025-08-18",
   "hora_inicio": "08:00",
-  "hora_fin": "08:40"
+  "hora_fin": "12:00",
+  "inicio_descanso": "10:00",
+  "fin_descanso": "10:40"
 }
 ```
 
-The slot is created with `disponible = true` by default, making it immediately bookable by patients.
+The doctor's identity is taken from the JWT — no `id_medico` field should be included in the body. MELIKA generates consecutive 40-minute windows from `hora_inicio` to `hora_fin`, skipping any window that overlaps the `inicio_descanso`–`fin_descanso` range. Duplicate slots (same doctor, date, and `hora_inicio`) are silently skipped.
+
+The response includes `insertadas` (slots newly created) and `duplicadas` (slots that already existed):
+
+```json
+{
+  "mensaje": "Se crearon 5 franja(s) de 40 minutos exitosamente.",
+  "insertadas": 5,
+  "duplicadas": 0,
+  "franjas_intentadas": 5
+}
+```
 
 ### Listing Slots by Date
 
@@ -83,9 +97,11 @@ GET /medico/franjas?fecha=2025-08-18
 Authorization: Bearer <token>
 ```
 
-Returns all slots for the specified date, each including its `disponible` status and any linked appointment ID.
+Returns all slots for the specified date, each including its `disponible` status and any linked appointment ID (`cita_id`).
 
 ### Editing a Slot
+
+Only slots without an active appointment (`disponible = true`) can be edited. The request body must include `fecha`, `hora_inicio`, and `hora_fin`:
 
 ```http
 PATCH /medico/franjas/:id
@@ -95,13 +111,14 @@ Content-Type: application/json
 
 ```json
 {
-  "hora_inicio": "08:30",
-  "hora_fin": "09:10"
+  "fecha": "2025-08-18",
+  "hora_inicio": "08:40",
+  "hora_fin": "09:20"
 }
 ```
 
 <Warning>
-  A slot can only be edited if **no active appointment** is currently booked into it. Attempting to edit a reserved slot returns a `409 Conflict` error.
+  The slot must have a duration of **exactly 40 minutes**. Attempting to edit a slot that already has a reserved appointment returns a `400` error. Attempting to create a time overlap with another existing slot for the same doctor and date returns a `409 Conflict` error.
 </Warning>
 
 ### Deleting a Slot
@@ -111,20 +128,20 @@ DELETE /medico/franjas/:id
 Authorization: Bearer <token>
 ```
 
-Deletion is permitted only when `disponible = true` (i.e., the slot is free). Slots with a confirmed or pending appointment cannot be removed.
+Deletion is permitted only when `disponible = true` (i.e., the slot is free). Slots with a confirmed or pending appointment return a `400` error and cannot be removed.
 
 ## Daily and Range Agenda
 
 <Tabs>
   <Tab title="Daily Agenda">
-    Retrieves every slot and its associated appointment details for a single date — ideal for the doctor's daily schedule view.
+    Retrieves every appointment for a single date — ideal for the doctor's daily schedule view.
 
     ```http
     GET /medico/agenda?fecha=2025-08-18
     Authorization: Bearer <token>
     ```
 
-    The response lists slots in chronological order with patient name, appointment status, and consultation type (teleconsulta / presencial).
+    The response lists appointments in chronological order with patient name and surname, appointment status, consultation type (`presencial` / `teleconsulta`), and a reference to the linked clinical history record (`historia_id`) if one exists.
   </Tab>
   <Tab title="Range Agenda">
     Returns FullCalendar-compatible event objects for a date range. Used to populate the interactive calendar on the doctor dashboard.
@@ -134,7 +151,7 @@ Deletion is permitted only when `disponible = true` (i.e., the slot is free). Sl
     Authorization: Bearer <token>
     ```
 
-    Each event object includes `title`, `start`, `end`, `color`, and a metadata payload for rendering appointment details in calendar popovers.
+    The response merges two sets of events: booked appointments (colour-coded by status — amber for `pendiente`, green for `completada`, grey for `no_asistio`) and free available slots (light green, labelled **Disponible (sin reservar)**). Each event carries an `extendedProps` object with `tipo`, `estado`, and `esFranjaDisponible` for use in calendar popovers.
   </Tab>
 </Tabs>
 
@@ -150,7 +167,8 @@ Content-Type: application/json
 
 ```json
 {
-  "estado": "completada"
+  "estado": "completada",
+  "notas_medicas": "Patient presented with mild hypertension. BP 145/90."
 }
 ```
 
@@ -161,7 +179,7 @@ The `estado` field accepts exactly two values:
 | `completada` | The patient attended and the consultation was carried out |
 | `no_asistio` | The patient did not attend |
 
-Setting the outcome to `completada` unlocks the clinical record creation form for that appointment.
+The `notas_medicas` field is optional. Cancelled appointments (`estado = 'cancelada'`) cannot be managed through this endpoint and return a `400` error. Setting the outcome to `completada` unlocks the clinical record creation form for that appointment.
 
 ## Clinical Records
 
@@ -181,8 +199,10 @@ Doctors create and maintain structured clinical histories linked to specific app
     {
       "id_cita": 88,
       "motivo_consulta": "Persistent headache for two weeks",
-      "diagnostico": "Tension-type headache",
-      "tratamiento": "Ibuprofen 400 mg every 8 h for 5 days",
+      "anamnesis": "Patient reports daily frontal headache of moderate intensity...",
+      "diagnostico_cie10": "G44.2",
+      "descripcion_diagnostico": "Tension-type headache",
+      "plan_tratamiento": "Ibuprofen 400 mg every 8 h for 5 days",
       "observaciones": "Follow-up in 2 weeks if no improvement"
     }
     ```
@@ -198,7 +218,7 @@ Doctors create and maintain structured clinical histories linked to specific app
 
     ```json
     {
-      "tratamiento": "Switched to naproxen 500 mg — better tolerance",
+      "plan_tratamiento": "Switched to naproxen 500 mg — better tolerance",
       "observaciones": "Patient reports improvement after 3 days"
     }
     ```
@@ -214,11 +234,13 @@ Doctors create and maintain structured clinical histories linked to specific app
 
     ```json
     {
-      "nota": "Laboratory results received after consultation confirm diagnosis. No medication change required."
+      "motivo_consulta": "Laboratory results received after consultation confirm diagnosis. No medication change required.",
+      "medico_nombre_firma": "Ana Ramírez",
+      "medico_rethus_firma": "1234567"
     }
     ```
 
-    Clarifications are appended as immutable entries, preserving the original record's integrity.
+    Clarifications are appended as immutable entries, preserving the original record's integrity. The `motivo_consulta` field (the body of the note) and the legal closure fields (`medico_nombre_firma`, `medico_rethus_firma`) are required.
   </Tab>
 </Tabs>
 

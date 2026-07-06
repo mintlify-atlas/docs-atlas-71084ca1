@@ -1,5 +1,5 @@
 ---
-title: "Get Started with MELIKA in Under 10 Minutes"
+title: "MELIKA Local Setup: Quickstart Guide for Developers"
 sidebarTitle: "Quickstart"
 description: "Clone the repo, configure environment variables, run the database schema, and boot both services to have a fully working MELIKA instance running locally."
 ---
@@ -90,7 +90,7 @@ Before you start, make sure the following are installed and available on your `P
   </Step>
 
   <Step title="Start the backend server">
-    From inside the `server/` directory, start the development server. `nodemon` watches `src/server.js` and restarts automatically on file changes.
+    From inside the `server/` directory, start the development server. `nodemon` is configured to watch `src/server.js` and restarts automatically when that file changes.
 
     ```bash
     npm run dev
@@ -98,7 +98,7 @@ Before you start, make sure the following are installed and available on your `P
 
     You should see the following confirmation in your terminal:
 
-    ```
+    ```text
     Servidor MELIKA listo y escuchando en el puerto 3000
     ```
   </Step>
@@ -178,7 +178,7 @@ const allowedOrigins = [
 ];
 ```
 
-Requests from any other origin will receive a `403 No permitido por CORS` error. To allow additional origins (such as a staging domain), add them to `FRONTEND_URL` or extend the `allowedOrigins` array.
+Requests from any other origin will be rejected by the `cors` middleware with a `No permitido por CORS` error before any route logic runs. To allow additional origins (such as a staging domain), add them to `FRONTEND_URL` or extend the `allowedOrigins` array.
 
 <Tip>
   **Deploying to production?** MELIKA is pre-configured for [Railway](https://railway.app). Railway can host the Express backend, React frontend (built with `npm run build`), and a managed PostgreSQL instance — all under a single project. Set the same environment variables shown above in each Railway service's **Variables** tab. See the Deployment guide for a step-by-step walkthrough.

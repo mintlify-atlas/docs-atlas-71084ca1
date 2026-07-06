@@ -1,10 +1,10 @@
 ---
 title: "Medications Catalog: OTC and Prescription Drug Reference"
 sidebarTitle: "Medications"
-description: "MELIKA's medication catalog classifies drugs as OTC or Rx, links them to specialties, and makes them searchable by commercial name or active ingredient for use in prescriptions."
+description: "MELIKA medications catalog: OTC and Rx drugs linked to medical specialties, filterable by type, specialty ID, or name for use in clinical prescriptions."
 ---
 
-MELIKA maintains a curated medications catalog that serves as the reference source for prescriptions written inside clinical records. Every medication is classified as either over-the-counter (`OTC`) or prescription-only (`Rx`), linked to a medical specialty, and searchable by commercial name or active ingredient. When a doctor prescribes during a consultation, they draw from this catalog — selected medications are serialized into the `medicamentos_recetados` JSONB field of the `historias_clinicas` record.
+MELIKA maintains a curated medications catalog that serves as the reference source for prescriptions written inside clinical records. Every medication is classified as either over-the-counter (`OTC`) or prescription-only (`Rx`), linked to a medical specialty via `id_especialidad`, and searchable by commercial name or active ingredient. When a doctor prescribes during a consultation, the prescription text is stored in the `medicamentos_recetados` JSONB field of the `historias_clinicas` record, while structured per-drug rows go into the separate `recetas_medicas` table.
 
 ## Medication Types
 
@@ -36,7 +36,7 @@ MELIKA maintains a curated medications catalog that serves as the reference sour
 
 ### Filtered Listing
 
-The main catalog endpoint supports three independent, combinable filters:
+The main catalog endpoint supports three independent, combinable query parameters:
 
 ```http
 GET /medicamentos?tipo=Rx&id_especialidad=1&buscar=losartan
@@ -44,7 +44,7 @@ GET /medicamentos?tipo=Rx&id_especialidad=1&buscar=losartan
 
 <Tabs>
   <Tab title="Filter by Type">
-    Return only OTC or only Rx medications:
+    Return only OTC or only Rx medications. The `tipo` parameter is validated against the set `['OTC', 'Rx']` — any other value is ignored.
 
     ```http
     GET /medicamentos?tipo=OTC
@@ -52,7 +52,7 @@ GET /medicamentos?tipo=Rx&id_especialidad=1&buscar=losartan
     ```
   </Tab>
   <Tab title="Filter by Specialty">
-    Return medications linked to a specific specialty using its numeric ID:
+    Return medications linked to a specific specialty using its **numeric ID**. Pass `id_especialidad` as an integer matching `especialidades.id`. The string value `"Todos"` is treated as no filter.
 
     ```http
     GET /medicamentos?id_especialidad=1
@@ -65,22 +65,22 @@ GET /medicamentos?tipo=Rx&id_especialidad=1&buscar=losartan
     GET /medicamentos?buscar=metform
     ```
 
-    This would match medications with `nombre_comercial` or `principio_activo` containing `"metform"`, such as `"Metformina"`.
+    This matches medications where either `nombre_comercial` or `principio_activo` contains `"metform"`, such as `"Metformina"`.
   </Tab>
   <Tab title="Combined Filters">
-    All three filters can be combined in a single request:
+    All three parameters can be combined in a single request:
 
     ```http
     GET /medicamentos?tipo=Rx&id_especialidad=1&buscar=atorva
     ```
 
-    Returns only active Rx medications under Cardiología that match `"atorva"` in name or ingredient.
+    Returns only active Rx medications under specialty `1` (e.g., Cardiología) that match `"atorva"` in name or ingredient.
   </Tab>
 </Tabs>
 
 ### Single Medication
 
-Retrieve full details for a specific medication by ID:
+Retrieve full details for a specific active medication by ID:
 
 ```http
 GET /medicamentos/:id
@@ -103,25 +103,33 @@ Example response:
 }
 ```
 
-### Category Listing
+Returns `404` if the medication does not exist or has `activo = FALSE`.
 
-Returns the distinct specialty names that have at least one active medication linked to them. Use this to populate specialty-based filter dropdowns in the catalog UI.
+### Specialty Categories Listing
+
+Returns the distinct specialty **names** that have at least one active medication linked to them. Use this to populate specialty-based filter labels in the catalog UI.
 
 ```http
 GET /medicamentos/categorias
 ```
+
+The endpoint queries `especialidades.nombre` dynamically via a `JOIN` on `medicamentos.id_especialidad`. Only specialties with at least one medication where `activo = TRUE` appear.
 
 Example response:
 
 ```json
 [
   "Cardiología",
-  "Neurología",
   "Medicina General",
+  "Neurología",
   "Psiquiatría",
   "Urología"
 ]
 ```
+
+<Note>
+  This endpoint returns specialty **names** as plain strings, not full specialty objects. Use `GET /especialidades` when you need full specialty records including `id`, `precio_base`, and `imagen_url`.
+</Note>
 
 ## Sample Medications in the Catalog
 
@@ -141,28 +149,21 @@ The following are representative medications available across the platform's spe
 
 ## Medications in Clinical Records
 
-When a doctor prescribes medications during a consultation, the selections are stored in the `medicamentos_recetados` JSONB field of the `historias_clinicas` table. Each prescription entry carries the medication's `id` (as a catalog reference) alongside the doctor-specified dosing instructions.
+When a doctor prescribes during a consultation, prescriptions are captured in two complementary ways:
 
-```json
-[
-  {
-    "id": 12,
-    "nombre": "Losartán",
-    "dosis": "50mg",
-    "frecuencia": "una vez al día, por la mañana"
-  },
-  {
-    "id": 4,
-    "nombre": "Atorvastatina",
-    "dosis": "20mg",
-    "frecuencia": "una vez al día, por la noche"
-  }
-]
-```
+1. **`medicamentos_recetados`** (JSONB on `historias_clinicas`) — stores a free-text prescription summary as `{ "texto": "..." }`.
+2. **`recetas_medicas` table** — stores structured per-drug rows submitted via the `recetas` array in `POST /historias`.
 
-<Note>
-  The `id` field in each prescription entry corresponds to `medicamentos.id` in the catalog. Frontend components can use this reference to resolve the full medication object — including `laboratorio`, `presentaciones`, and `imagen_url` — when rendering the prescription in the PDF or patient-facing view.
-</Note>
+Each row in `recetas_medicas` contains:
+
+| Field | Description |
+|---|---|
+| `medicamento` | Drug name |
+| `dosis` | Dose amount |
+| `frecuencia` | Dosing frequency |
+| `duracion` | Treatment duration |
+| `via_administracion` | Route of administration (optional) |
+| `indicaciones` | Special instructions (optional) |
 
 <Tip>
   When building the prescription editor, pre-filter the medication picker using `id_especialidad` matching the current appointment's specialty. This surfaces the most clinically relevant drugs first and reduces the search space for the prescribing doctor.
@@ -170,17 +171,16 @@ When a doctor prescribes medications during a consultation, the selections are s
 
 ## Admin Management
 
-Administrators have full CRUD access to the medications catalog through the admin endpoints.
+Administrators manage the medications catalog through standard CRUD endpoints. No separate `/admin/` path prefix is used.
 
 <Accordion title="Admin Medication Endpoints">
   | Method | Endpoint | Action |
   |---|---|---|
-  | `POST` | `/admin/medicamentos` | Create a new medication entry |
-  | `PUT` | `/admin/medicamentos/:id` | Update all fields of an existing medication |
-  | `PATCH` | `/admin/medicamentos/:id` | Partially update fields (e.g., change `tipo` or `laboratorio`) |
-  | `PATCH` | `/admin/medicamentos/:id/toggle` | Toggle `activo` status — deactivating hides the medication from all catalog queries without deleting it |
+  | `GET` | `/medicamentos/admin` | Retrieve the full catalog including inactive medications |
+  | `POST` | `/medicamentos` | Create a new medication entry |
+  | `PUT` | `/medicamentos/:id` | Update all fields of an existing medication |
 </Accordion>
 
 <Warning>
-  Deactivating a medication (`activo = FALSE`) removes it from `GET /medicamentos` responses and `GET /medicamentos/categorias`, but does **not** retroactively remove it from existing clinical records where it was already prescribed. Historical `medicamentos_recetados` JSONB data is preserved as-is.
+  Deactivating a medication (`activo = FALSE`) removes it from `GET /medicamentos` and `GET /medicamentos/categorias` responses, but does **not** retroactively affect existing clinical records where it was already prescribed. Historical prescription data in `recetas_medicas` and `medicamentos_recetados` is preserved as-is.
 </Warning>

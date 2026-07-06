@@ -1,10 +1,10 @@
 ---
-title: "Medications API — Drug Catalog with OTC and Rx Classification"
+title: "Medications API — Drug Catalog, OTC and Rx Classification"
 sidebarTitle: "Medications"
-description: "Query MELIKA's medication catalog by type (OTC/Rx), specialty, or search term. Returns commercial name, active ingredient, lab, presentation, and specialty linkage."
+description: "Query MELIKA's drug catalog by OTC/Rx type, specialty, or keyword. Returns commercial name, active ingredient, lab, presentations, and specialty linkage."
 ---
 
-The Medications API exposes MELIKA's drug catalog for use across the platform — from patient-facing drug information pages to physician prescribing workflows. Medications are classified as either **OTC** (over-the-counter, no prescription required) or **Rx** (prescription-only), are linked to medical specialties for contextual filtering, and carry structured presentation data. All endpoints are public with no authentication required, though write operations are restricted to admin routes at the application layer.
+The Medications API exposes MELIKA's drug catalog for use across the platform — from patient-facing drug information pages to physician prescribing workflows. Medications are classified as either **OTC** (over-the-counter, no prescription required) or **Rx** (prescription-only), are linked to medical specialties for contextual filtering, and carry structured presentation data. All read endpoints are public with no authentication required, though write operations are restricted to admin routes at the application layer.
 
 ---
 
@@ -15,7 +15,7 @@ The Medications API exposes MELIKA's drug catalog for use across the platform �
     Medications available without a prescription. Suitable for display in patient-facing catalogs, symptom checkers, and general wellness flows. Filtered with `tipo=OTC`.
   </Card>
   <Card title="Rx — Prescription Only" icon="file-prescription">
-    Medications that require a physician's prescription. These appear in clinical workflows, physician prescribing panels, and are embedded in clinical records via `medicamentos_recetados`. Filtered with `tipo=Rx`.
+    Medications that require a physician's prescription. These appear in clinical workflows, physician prescribing panels, and are referenced inside clinical records. Filtered with `tipo=Rx`.
   </Card>
 </CardGroup>
 
@@ -28,15 +28,21 @@ The `medicamentos` table stores the full drug profile including commercial ident
 | Field | Type | Notes |
 |---|---|---|
 | `id` | integer | Primary key |
-| `nombre_comercial` | VARCHAR | Brand/commercial name |
-| `principio_activo` | VARCHAR | Generic active ingredient name |
-| `laboratorio` | VARCHAR | Manufacturing laboratory |
-| `tipo` | ENUM | `OTC` or `Rx` |
+| `nombre_comercial` | VARCHAR(150) | Brand/commercial name |
+| `principio_activo` | VARCHAR(150) | Generic active ingredient name |
+| `principio_activa` | VARCHAR(150) | Legacy duplicate of `principio_activo` — both are kept in sync on write |
+| `laboratorio` | VARCHAR(100) | Manufacturing laboratory |
+| `categoria` | VARCHAR(100) | Legacy text category field (superseded by `id_especialidad`) |
+| `id_especialidad` | integer | FK → specialties (contextual linkage for catalog filtering) |
+| `tipo` | ENUM | `OTC` or `Rx` (enforced by CHECK constraint) |
 | `descripcion` | TEXT | Clinical description |
-| `presentaciones` | TEXT / JSONB | Available forms and dosages (e.g. tablets, syrup) |
-| `imagen_url` | VARCHAR | URL to product image |
-| `id_especialidad` | integer | FK → specialties (contextual linkage) |
-| `activo` | boolean | Only `TRUE` records appear in public queries |
+| `indicaciones` | TEXT | Clinical indications |
+| `posologia` | TEXT | Dosage guidance |
+| `contraindicaciones` | TEXT | Contraindications |
+| `presentaciones` | TEXT | Available forms and dosages (e.g. tablets, syrup) |
+| `registro_invima` | VARCHAR(50) | INVIMA registration number (unique when set) |
+| `imagen_url` | VARCHAR(255) | URL to product image |
+| `activo` | boolean | Only `TRUE` records appear in public queries. Default `TRUE` |
 | `created_at` | timestamp | Auto-generated |
 | `updated_at` | timestamp | Auto-updated |
 
@@ -50,7 +56,7 @@ The `medicamentos` table stores the full drug profile including commercial ident
 
 ### GET /medicamentos
 
-Returns a filtered, pageable list of active medications. Supports three independent query filters that can be combined freely: `tipo` restricts by prescription class, `id_especialidad` restricts by specialty linkage, and `buscar` performs a case-insensitive full-text search across both `nombre_comercial` and `principio_activo`. Results are ordered alphabetically by `nombre_comercial`.
+Returns a filtered list of active medications. Supports three independent query filters that can be combined freely: `tipo` restricts by prescription class, `id_especialidad` restricts by specialty linkage, and `buscar` performs a case-insensitive full-text search across both `nombre_comercial` and `principio_activo`. Results are ordered alphabetically by `nombre_comercial`.
 
 **Authentication:** None (public)
 
@@ -89,7 +95,7 @@ Returns a filtered, pageable list of active medications. Supports three independ
   URL to the product image.
 </ResponseField>
 <ResponseField name="[].id_especialidad" type="integer">
-  ID of the linked specialty.
+  ID of the linked specialty (nullable).
 </ResponseField>
 <ResponseField name="[].activo" type="boolean">
   Always `true` in public responses.
@@ -128,24 +134,12 @@ curl -X GET "http://localhost:3000/medicamentos?tipo=OTC&id_especialidad=2"
     "imagen_url": "https://storage.example.com/meds/metformina.jpg",
     "id_especialidad": 4,
     "activo": true
-  },
-  {
-    "id": 27,
-    "nombre_comercial": "Glucophage XR",
-    "principio_activo": "metformina",
-    "laboratorio": "Merck",
-    "tipo": "Rx",
-    "descripcion": "Formulación de liberación extendida de metformina para diabetes tipo 2.",
-    "presentaciones": "Tabletas de liberación extendida 500mg, 750mg",
-    "imagen_url": "https://storage.example.com/meds/glucophage.jpg",
-    "id_especialidad": 4,
-    "activo": true
   }
 ]
 ```
 
 <Tip>
-  Combine `tipo=Rx` with a `buscar` term to power a physician-side drug search widget during prescription creation. The results map directly to the objects expected by the `medicamentos_recetados` JSONB field in clinical records.
+  Combine `tipo=Rx` with a `buscar` term to power a physician-side drug search widget during prescription creation.
 </Tip>
 
 ---
@@ -173,12 +167,12 @@ curl -X GET "http://localhost:3000/medicamentos/admin"
 
 ### GET /medicamentos/categorias
 
-Returns a deduplicated list of specialty names that have at least one active medication linked to them. This powers category filter UIs in medication browsers, letting patients or physicians narrow results to a specific discipline before applying further filters.
+Returns a deduplicated list of specialty **names** (not IDs) that have at least one active medication linked to them. This powers category filter UIs in medication browsers, letting patients or physicians narrow results to a specific discipline before applying further filters.
 
 **Authentication:** None (public)
 
 <ResponseField name="[]" type="string">
-  Array of specialty name strings (e.g. `["Cardiología", "Endocrinología", "Pediatría"]`). Each value corresponds to the `nombre` field of a specialty that has at least one active medication.
+  Array of specialty name strings (e.g. `["Cardiología", "Endocrinología", "Pediatría"]`). Each value corresponds to the `nombre` field of a specialty that has at least one active medication linked via `id_especialidad`.
 </ResponseField>
 
 <CodeGroup>
@@ -223,7 +217,10 @@ Retrieves the full profile of a single active medication by its ID. Returns **40
 <ResponseField name="laboratorio" type="string">Manufacturing laboratory.</ResponseField>
 <ResponseField name="tipo" type="string">`"OTC"` or `"Rx"`.</ResponseField>
 <ResponseField name="descripcion" type="string">Clinical description.</ResponseField>
+<ResponseField name="indicaciones" type="string">Clinical indications.</ResponseField>
+<ResponseField name="contraindicaciones" type="string">Contraindications.</ResponseField>
 <ResponseField name="presentaciones" type="string">Available forms and dosages.</ResponseField>
+<ResponseField name="registro_invima" type="string">INVIMA registration number.</ResponseField>
 <ResponseField name="imagen_url" type="string">Product image URL.</ResponseField>
 <ResponseField name="id_especialidad" type="integer">Linked specialty ID.</ResponseField>
 <ResponseField name="activo" type="boolean">Active status (`true` for all public responses).</ResponseField>
@@ -233,6 +230,7 @@ Retrieves the full profile of a single active medication by its ID. Returns **40
 <Expandable title="Error Responses">
   | Status | Condition |
   |---|---|
+  | `400` | Provided `id` is not a valid number |
   | `404` | No active medication found with the given `id` |
 </Expandable>
 
@@ -260,8 +258,11 @@ if (res.status === 404) {
   "principio_activo": "metformina",
   "laboratorio": "Laboratorios GenFar",
   "tipo": "Rx",
-  "descripcion": "Antidiabético oral de la clase biguanida. Reduce la producción hepática de glucosa y mejora la sensibilidad a la insulina.",
+  "descripcion": "Antidiabético oral de la clase biguanida. Reduce la producción hepática de glucosa.",
+  "indicaciones": "Diabetes mellitus tipo 2",
+  "contraindicaciones": "Insuficiencia renal severa",
   "presentaciones": "Tabletas 500mg, 850mg, 1000mg",
+  "registro_invima": "M-1234-56",
   "imagen_url": "https://storage.example.com/meds/metformina.jpg",
   "id_especialidad": 4,
   "activo": true,
@@ -274,36 +275,36 @@ if (res.status === 404) {
 
 ### POST /medicamentos
 
-Creates a new medication entry in the catalog. This operation is reserved for platform administrators and is exposed through the `/admin/medicamentos` route layer.
+Creates a new medication entry in the catalog. The request body uses short field names (`nombre`, `principio`, `presentacion`) that the controller maps to the corresponding database column names. This route is exposed through the `/medicamentos` path and is also mirrored under `/admin/medicamentos` (with different field names — see the Admin API).
 
 **Authentication:** None at route level (enforced at the admin layer)
 
-<ParamField body="nombre_comercial" type="string" required>
-  The brand or commercial name of the medication.
-</ParamField>
-<ParamField body="principio_activo" type="string" required>
-  The generic active ingredient name.
-</ParamField>
-<ParamField body="laboratorio" type="string">
-  The manufacturing laboratory.
+<ParamField body="nombre" type="string" required>
+  The brand or commercial name of the medication. Stored as `nombre_comercial`.
 </ParamField>
 <ParamField body="tipo" type="string" required>
   Prescription classification. Must be exactly `"OTC"` or `"Rx"`.
 </ParamField>
+<ParamField body="principio" type="string">
+  Active ingredient(s). Stored in both `principio_activo` and `principio_activa` columns.
+</ParamField>
 <ParamField body="descripcion" type="string">
-  Clinical description of the medication and its indications.
+  Free-text description of the medication.
 </ParamField>
-<ParamField body="presentaciones" type="string">
-  Available forms and dosages (e.g. `"Tabletas 500mg, 1000mg; Solución oral 250mg/5ml"`).
-</ParamField>
-<ParamField body="imagen_url" type="string">
-  URL to the product image.
-</ParamField>
-<ParamField body="id_especialidad" type="integer">
-  ID of the specialty this medication is primarily associated with.
+<ParamField body="presentacion" type="string">
+  Physical form / presentations (e.g. `"Tabletas 500 mg"`). Stored as `presentaciones`.
 </ParamField>
 <ParamField body="activo" type="boolean">
-  Whether the medication is immediately visible in public queries. Defaults to `true`.
+  Whether the medication is active in the catalog. Defaults to `true`.
+</ParamField>
+<ParamField body="laboratorio" type="string">
+  Name of the pharmaceutical laboratory.
+</ParamField>
+<ParamField body="id_especialidad" type="integer">
+  Optional link to a specialty ID (used for catalog filtering).
+</ParamField>
+<ParamField body="imagen_url" type="string">
+  URL of the medication's product image.
 </ParamField>
 
 <CodeGroup>
@@ -311,15 +312,13 @@ Creates a new medication entry in the catalog. This operation is reserved for pl
 curl -X POST http://localhost:3000/medicamentos \
   -H "Content-Type: application/json" \
   -d '{
-    "nombre_comercial": "Atorvastatina 20",
-    "principio_activo": "atorvastatina",
-    "laboratorio": "Pfizer",
+    "nombre": "Atorvastatina 20",
+    "principio": "atorvastatina",
     "tipo": "Rx",
     "descripcion": "Inhibidor de la HMG-CoA reductasa. Indicado para la reducción del colesterol LDL.",
-    "presentaciones": "Tabletas 10mg, 20mg, 40mg",
-    "imagen_url": "https://storage.example.com/meds/atorvastatina.jpg",
-    "id_especialidad": 1,
-    "activo": true
+    "presentacion": "Tabletas 10mg, 20mg, 40mg",
+    "laboratorio": "Pfizer",
+    "id_especialidad": 1
   }'
 ```
 </CodeGroup>
@@ -328,21 +327,18 @@ curl -X POST http://localhost:3000/medicamentos \
 
 ### PUT /medicamentos/:id
 
-Fully updates an existing medication record. All fields may be replaced. Setting `activo=false` removes the medication from all public-facing queries without deleting the record.
+Fully updates an existing medication record. Uses the same short field names as `POST /medicamentos`. Setting `activo=false` removes the medication from all public-facing queries without deleting the record.
 
 **Authentication:** None at route level (enforced at the admin layer)
 
 <ParamField path="id" type="integer" required>
   The ID of the medication to update.
 </ParamField>
-<ParamField body="nombre_comercial" type="string">
-  Updated commercial name.
+<ParamField body="nombre" type="string">
+  Updated commercial name. Stored as `nombre_comercial`.
 </ParamField>
-<ParamField body="principio_activo" type="string">
-  Updated active ingredient.
-</ParamField>
-<ParamField body="laboratorio" type="string">
-  Updated laboratory.
+<ParamField body="principio" type="string">
+  Updated active ingredient. Stored as `principio_activo` and `principio_activa`.
 </ParamField>
 <ParamField body="tipo" type="string">
   Updated classification: `"OTC"` or `"Rx"`.
@@ -350,17 +346,20 @@ Fully updates an existing medication record. All fields may be replaced. Setting
 <ParamField body="descripcion" type="string">
   Updated clinical description.
 </ParamField>
-<ParamField body="presentaciones" type="string">
-  Updated presentation forms and dosages.
+<ParamField body="presentacion" type="string">
+  Updated presentation forms and dosages. Stored as `presentaciones`.
 </ParamField>
-<ParamField body="imagen_url" type="string">
-  Updated product image URL.
+<ParamField body="activo" type="boolean">
+  Set to `false` to deactivate and hide from public listings.
+</ParamField>
+<ParamField body="laboratorio" type="string">
+  Updated laboratory name.
 </ParamField>
 <ParamField body="id_especialidad" type="integer">
   Updated specialty linkage.
 </ParamField>
-<ParamField body="activo" type="boolean">
-  Set to `false` to deactivate and hide from public listings.
+<ParamField body="imagen_url" type="string">
+  Updated product image URL.
 </ParamField>
 
 <CodeGroup>
@@ -368,7 +367,10 @@ Fully updates an existing medication record. All fields may be replaced. Setting
 curl -X PUT http://localhost:3000/medicamentos/14 \
   -H "Content-Type: application/json" \
   -d '{
-    "presentaciones": "Tabletas 500mg, 850mg, 1000mg; Solución oral 500mg/5ml",
+    "nombre": "Metformina 500",
+    "principio": "metformina",
+    "tipo": "Rx",
+    "presentacion": "Tabletas 500mg, 850mg, 1000mg; Solución oral 500mg/5ml",
     "activo": true
   }'
 ```
@@ -378,7 +380,10 @@ const res = await fetch('http://localhost:3000/medicamentos/14', {
   method: 'PUT',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({
-    presentaciones: 'Tabletas 500mg, 850mg, 1000mg; Solución oral 500mg/5ml',
+    nombre: 'Metformina 500',
+    principio: 'metformina',
+    tipo: 'Rx',
+    presentacion: 'Tabletas 500mg, 850mg, 1000mg; Solución oral 500mg/5ml',
     activo: true
   })
 });

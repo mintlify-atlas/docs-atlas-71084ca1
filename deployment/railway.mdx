@@ -12,13 +12,13 @@ MELIKA runs as three Railway services within a single project. Keeping them sepa
 
 <CardGroup cols={3}>
   <Card title="server" icon="server">
-    Node.js ≥ 20 + Express 5. Reads `DATABASE_URL`, `JWT_SECRET`, `FRONTEND_URL`, and the Gmail OAuth2 variables. Start command: `node src/server.js`.
+    Node.js ≥ 20 + Express 5. Reads `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`, `JWT_SECRET`, `FRONTEND_URL`, and the Gmail OAuth2 variables. Start command: `node src/server.js`.
   </Card>
   <Card title="client" icon="browser">
-    React 19 + Vite 8 static build. Needs `VITE_API_URL` set **before** the build runs. Served with the `serve` package. Start command: `npm run start`.
+    React 19 + Vite 8 static build. Needs `VITE_API_URL` set **before** the build runs. Served with the `serve` package. Start command: `npm start`.
   </Card>
   <Card title="postgres" icon="database">
-    Railway-managed PostgreSQL. Automatically injects `DATABASE_URL` into linked services. No manual connection-string management needed.
+    Railway-managed PostgreSQL. Exposes `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, and `PGDATABASE` — wire these into the server service as `DB_*` variables using Railway variable references.
   </Card>
 </CardGroup>
 
@@ -31,15 +31,14 @@ MELIKA runs as three Railway services within a single project. Keeping them sepa
     Give the project a name (e.g. `melika`) and note the project URL. All three services will live under this project.
   </Step>
   <Step title="Add the PostgreSQL database service">
-    Inside the project, click **New** → **Database** → **Add PostgreSQL**. Railway provisions a managed Postgres instance and immediately makes the following variables available to any service you link to it:
+    Inside the project, click **New** → **Database** → **Add PostgreSQL**. Railway provisions a managed Postgres instance and immediately makes the following variables available:
 
     ```
-    DATABASE_URL
     PGHOST / PGPORT / PGUSER / PGPASSWORD / PGDATABASE
     ```
 
     <Note>
-      Railway injects `DATABASE_URL` automatically into every service that references the Postgres service. You do not need to copy or hard-code the connection string anywhere.
+      Railway exposes individual `PG*` variables for the Postgres service. You will wire these into the server service as `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, and `DB_PASSWORD` using Railway variable references in the next step.
     </Note>
   </Step>
   <Step title="Deploy the backend service">
@@ -55,26 +54,32 @@ MELIKA runs as three Railway services within a single project. Keeping them sepa
         | **Service name** | `server` |
       </Tab>
       <Tab title="Environment variables">
-        Add these variables in **Settings → Variables** for the `server` service:
+        Add these variables in **Settings → Variables** for the `server` service. Use Railway variable references (e.g. `${{Postgres.PGHOST}}`) to pull values from the Postgres service without copying secrets manually:
 
         ```bash
+        DB_HOST=${{Postgres.PGHOST}}
+        DB_PORT=${{Postgres.PGPORT}}
+        DB_NAME=${{Postgres.PGDATABASE}}
+        DB_USER=${{Postgres.PGUSER}}
+        DB_PASSWORD=${{Postgres.PGPASSWORD}}
+
         JWT_SECRET=<64-plus-character-random-string>
         FRONTEND_URL=<leave blank for now — fill in after client deploys>
 
-        GMAIL_USER=noreply@yourapp.com
+        EMAIL_USER=noreply@yourapp.com
         GMAIL_CLIENT_ID=<from Google Cloud Console>
         GMAIL_CLIENT_SECRET=<from Google Cloud Console>
         GMAIL_REFRESH_TOKEN=<from OAuth2 Playground>
         ```
 
-        Then click **Add Reference** → select the `postgres` service → Railway adds `DATABASE_URL` and `PORT` automatically.
+        Railway injects `PORT` automatically — you do not need to set it.
       </Tab>
     </Tabs>
 
     Click **Deploy**. Watch the build logs — the server starts when you see output like:
 
     ```
-    Servidor MELIKA corriendo en puerto 3000
+    Servidor MELIKA listo y escuchando en el puerto 3000
     ```
   </Step>
   <Step title="Apply the database schema">
@@ -85,13 +90,14 @@ MELIKA runs as three Railway services within a single project. Keeping them sepa
         Open the `server` service in Railway, click **Shell**, and run:
 
         ```bash
-        psql $DATABASE_URL -f src/database/melika_db.sql
+        psql "postgresql://$DB_USER:$DB_PASSWORD@$DB_HOST:$DB_PORT/$DB_NAME" \
+          -f src/database/melika_db.sql
         ```
 
-        Railway's internal network gives the shell direct access to Postgres via the injected `DATABASE_URL`.
+        Railway's internal network gives the shell direct access to Postgres via the injected `DB_*` variables.
       </Tab>
       <Tab title="Local psql with Railway URL">
-        Copy `DATABASE_URL` from the Postgres service's **Connect** tab (use the public URL that includes the Railway proxy port). Then run locally:
+        Copy the connection details from the Postgres service's **Connect** tab (use the public URL that includes the Railway proxy port). Then run locally:
 
         ```bash
         psql "postgresql://postgres:<password>@<host>.railway.app:<port>/railway" \
@@ -106,20 +112,21 @@ MELIKA runs as three Railway services within a single project. Keeping them sepa
     \dt
     -- Expected: usuarios, codigos_verificacion, tokens_invitacion,
     --           especialidades, medicamentos, medicos, franjas_horarias,
-    --           citas, historias_clinicas, logs_citas
+    --           citas, historias_clinicas, logs_citas,
+    --           documentos_clinicos, recetas_medicas, ordenes_examenes
     ```
   </Step>
   <Step title="Create the first admin user">
     Still in the `server` service **Shell** on Railway, run the admin-creation script:
 
     ```bash
-    node server/scripts/crearAdmin.js
+    node scripts/crearAdmin.js
     ```
 
-    Follow the prompts to set the admin username, email, and password. This account bypasses the email-verification flow and can log in immediately.
+    The script does not prompt for input — admin credentials are hardcoded inside the script. On success it prints the email, role, and initial plaintext password. **Change the password immediately after the first login.**
 
     <Note>
-      This step must be performed **after** the schema is applied. The script will fail with a relation-not-found error if the `usuarios` table does not exist yet.
+      This step must be performed **after** the schema is applied. The script will fail with a relation-not-found error if the `usuarios` table does not exist yet. The shell opens at `/server` (the service root directory), so the path is `scripts/crearAdmin.js`, not `server/scripts/crearAdmin.js`.
     </Note>
   </Step>
   <Step title="Deploy the frontend service">
@@ -129,7 +136,7 @@ MELIKA runs as three Railway services within a single project. Keeping them sepa
     |---|---|
     | **Root directory** | `/client` |
     | **Build command** | `npm run build` |
-    | **Start command** | `npm run start` |
+    | **Start command** | `npm start` |
     | **Service name** | `client` |
 
     <Warning>
@@ -164,16 +171,17 @@ MELIKA runs as three Railway services within a single project. Keeping them sepa
 
 ## client/railway.json
 
-The `/client` directory includes a `railway.json` configuration file that Railway reads automatically when deploying the client service. It codifies the build and start commands so you do not need to re-enter them manually in the dashboard. If you need to change build behaviour (e.g. add a Node.js version constraint or override the build command), edit `client/railway.json` rather than the dashboard setting, so the configuration stays in version control.
+The `/client` directory includes a `railway.json` configuration file that Railway reads automatically when deploying the client service. It codifies the builder, build command, start command, and restart policy so you do not need to re-enter them manually in the dashboard. If you need to change build behaviour, edit `client/railway.json` rather than the dashboard setting so the configuration stays in version control.
 
 ```json client/railway.json
 {
-  "$schema": "https://railway.app/railway-schema.json",
+  "$schema": "https://railway.app/railway.schema.json",
   "build": {
-    "builder": "NIXPACKS"
+    "builder": "NIXPACKS",
+    "buildCommand": "npm run build"
   },
   "deploy": {
-    "startCommand": "npm run start",
+    "startCommand": "npm start",
     "restartPolicyType": "ON_FAILURE"
   }
 }
@@ -205,12 +213,18 @@ Then open the frontend URL in a browser, log in with the admin credentials you c
     ```bash
     # Injected automatically by Railway
     PORT                  # assigned by Railway
-    DATABASE_URL          # injected from linked Postgres service
+
+    # Wired from the Postgres service via variable references
+    DB_HOST               # ${{Postgres.PGHOST}}
+    DB_PORT               # ${{Postgres.PGPORT}}
+    DB_NAME               # ${{Postgres.PGDATABASE}}
+    DB_USER               # ${{Postgres.PGUSER}}
+    DB_PASSWORD           # ${{Postgres.PGPASSWORD}}
 
     # Set manually
     JWT_SECRET            # long random string — never share
     FRONTEND_URL          # exact URL of the client service (no trailing slash)
-    GMAIL_USER            # sender Gmail address
+    EMAIL_USER            # sender Gmail address
     GMAIL_CLIENT_ID       # Google Cloud OAuth2 client ID
     GMAIL_CLIENT_SECRET   # Google Cloud OAuth2 client secret
     GMAIL_REFRESH_TOKEN   # OAuth2 refresh token
@@ -235,9 +249,9 @@ Then open the frontend URL in a browser, log in with the admin credentials you c
 </Accordion>
 
 <Accordion title="Database connection refused on first deploy">
-  Make sure the `server` service has the Postgres service referenced (not just the `DATABASE_URL` string copied manually). Railway's internal networking is only active for services within the same project that are properly linked.
+  Make sure all five `DB_*` variables are set on the `server` service and point to the Railway Postgres instance. Use Railway variable references (`${{Postgres.PGHOST}}` etc.) to ensure the values stay in sync if the Postgres service is reprovisioned.
 </Accordion>
 
 <Accordion title="Admin script fails with 'relation does not exist'">
-  The schema has not been applied yet. Run `psql $DATABASE_URL -f src/database/melika_db.sql` in the Railway shell first, then retry `node server/scripts/crearAdmin.js`.
+  The schema has not been applied yet. Run the `psql` command with `melika_db.sql` in the Railway shell first, then retry `node scripts/crearAdmin.js`.
 </Accordion>
